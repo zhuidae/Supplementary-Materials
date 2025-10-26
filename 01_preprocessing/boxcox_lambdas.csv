@@ -1,0 +1,5 @@
+DV,lambda,ci_lower,ci_upper,note
+RT,-0.1,-0.95,-0.5999999999999999,Override per manuscript (-0.1)
+TRUST,1.6500000000000004,1.35,1.9500000000000002,Box–Cox on positive data
+SUS,1.3000000000000003,1,1.5500000000000003,Box–Cox on positive data
+DALI,0.9000000000000004,0.7000000000000002,1.1,Box–Cox on positive data

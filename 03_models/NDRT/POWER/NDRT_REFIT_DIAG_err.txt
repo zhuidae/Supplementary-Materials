@@ -1,0 +1,3 @@
+doFit.default error: object 'dat' not found 
+TRACE:
+ No traceback available 

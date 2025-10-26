@@ -1,0 +1,10 @@
+effect,metric,estimate,ci_lower,ci_upper
+Visual_Factor,partial_eta2,0.09279643356097834,0.04691813845270646,1
+Auditory_Factor,partial_eta2,0.0730499377426272,0.03610672407027693,1
+Haptic_Factor,partial_eta2,0.0028511209869426,0,1
+Visual_Factor:Auditory_Factor,partial_eta2,0.05678000612586446,0.0203525889064347,1
+Visual_Factor:Haptic_Factor,partial_eta2,0.00897832876800602,0,1
+Auditory_Factor:Haptic_Factor,partial_eta2,0.00105154202443791,0,1
+Visual_Factor:Auditory_Factor:Haptic_Factor,partial_eta2,0.00346983928655902,0,1
+Model,R2_marginal,0.06853778539314162,NA,NA
+Model,R2_conditional,0.7170830720345511,NA,NA

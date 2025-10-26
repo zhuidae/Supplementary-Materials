@@ -1,0 +1,8 @@
+indicator,type,normalization_formula,unit
+RT,cost,"min-max to 0–1, lower=better",s
+TRUST,benefit,"min-max to 0–1, higher=better",score
+SUS,benefit,"min-max to 0–1, higher=better",score
+DALI,cost,"min-max to 0–1, lower=better",score
+NDRT,cost,"min-max to 0–1, lower=better",proportion
+DURVISIT,cost,"min-max to 0–1, lower=better",s
+PUPIL,cost,"min-max to 0–1, lower=better",a.u.

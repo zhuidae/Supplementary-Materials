@@ -1,0 +1,20 @@
+# Check for Multicollinearity
+
+Low Correlation
+
+                                        Term  VIF      VIF  CI adj. VIF
+                               Visual_Factor 1.00                  1.00
+                             Auditory_Factor 1.00 [1.00, 1.00]     1.00
+                               Haptic_Factor 1.00 [1.00, 1.00]     1.00
+               Visual_Factor:Auditory_Factor 1.00                  1.00
+                 Visual_Factor:Haptic_Factor 1.00                  1.00
+               Auditory_Factor:Haptic_Factor 1.00 [1.00, 1.00]     1.00
+ Visual_Factor:Auditory_Factor:Haptic_Factor 1.00                  1.00
+ Tolerance
+      1.00
+      1.00
+      1.00
+      1.00
+      1.00
+      1.00
+      1.00

@@ -1,0 +1,3 @@
+SPEC:
+~Visual_Factor | Auditory_Factor
+ADJ: tukey

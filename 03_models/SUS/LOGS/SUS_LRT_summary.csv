@@ -1,0 +1,5 @@
+term,chisq,df,p,sig,anova_type,method
+Visual_Factor:Auditory_Factor:Haptic_Factor,3.753155704891469,3,0.2893821280256465,,III,ML nested-model Chi-square
+Visual_Factor:Auditory_Factor,12.70698204769269,6,0.047932402044635176,*,III,ML nested-model Chi-square
+Visual_Factor:Haptic_Factor,7.271553476301051,6,0.296462598251134,,III,ML nested-model Chi-square
+Auditory_Factor:Haptic_Factor,27.655431076569585,4,1.464784346234496e-5,*,III,ML nested-model Chi-square

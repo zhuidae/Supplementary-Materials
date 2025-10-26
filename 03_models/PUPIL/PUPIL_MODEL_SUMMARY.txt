@@ -1,0 +1,56 @@
+Linear mixed model fit by REML. t-tests use Satterthwaite's method [
+lmerModLmerTest]
+Formula: f2
+   Data: data
+Control: lmerControl(check.conv.singular = "ignore", optimizer = "bobyqa",  
+    optCtrl = list(maxfun = 2e+05))
+
+REML criterion at convergence: -817.5
+
+Scaled residuals: 
+     Min       1Q   Median       3Q      Max 
+-2.84249 -0.61267  0.00067  0.64025  2.74138 
+
+Random effects:
+ Groups         Name        Variance Std.Dev.
+ Participant_ID (Intercept) 0.010931 0.10455 
+ Residual                   0.004769 0.06906 
+Number of obs: 416, groups:  Participant_ID, 30
+
+Fixed effects:
+                                                 Estimate Std. Error         df
+(Intercept)                                      1.242540   0.019412  28.880730
+Visual_Factor1                                  -0.023924   0.006008 371.125822
+Visual_Factor2                                  -0.017972   0.005855 371.047642
+Visual_Factor3                                   0.021689   0.005855 370.955151
+Auditory_Factor1                                 0.018584   0.003434 371.553606
+Haptic_Factor1                                   0.003517   0.003414 371.158708
+Visual_Factor1:Auditory_Factor1                 -0.023349   0.006027 371.311840
+Visual_Factor2:Auditory_Factor1                 -0.005898   0.005878 371.352055
+Visual_Factor3:Auditory_Factor1                  0.009320   0.005869 371.125435
+Visual_Factor1:Haptic_Factor1                    0.001881   0.006021 371.239271
+Visual_Factor2:Haptic_Factor1                   -0.010535   0.005858 371.063818
+Visual_Factor3:Haptic_Factor1                    0.005077   0.005871 371.165805
+Auditory_Factor1:Haptic_Factor1                 -0.002141   0.003425 371.424246
+Visual_Factor1:Auditory_Factor1:Haptic_Factor1   0.001881   0.006034 371.488344
+Visual_Factor2:Auditory_Factor1:Haptic_Factor1   0.001476   0.005867 371.181237
+Visual_Factor3:Auditory_Factor1:Haptic_Factor1  -0.006569   0.005860 371.007578
+                                               t value Pr(>|t|)    
+(Intercept)                                     64.010  < 2e-16 ***
+Visual_Factor1                                  -3.982 8.22e-05 ***
+Visual_Factor2                                  -3.070 0.002301 ** 
+Visual_Factor3                                   3.705 0.000244 ***
+Auditory_Factor1                                 5.411 1.12e-07 ***
+Haptic_Factor1                                   1.030 0.303602    
+Visual_Factor1:Auditory_Factor1                 -3.874 0.000127 ***
+Visual_Factor2:Auditory_Factor1                 -1.003 0.316325    
+Visual_Factor3:Auditory_Factor1                  1.588 0.113168    
+Visual_Factor1:Haptic_Factor1                    0.312 0.754882    
+Visual_Factor2:Haptic_Factor1                   -1.798 0.072928 .  
+Visual_Factor3:Haptic_Factor1                    0.865 0.387666    
+Auditory_Factor1:Haptic_Factor1                 -0.625 0.532169    
+Visual_Factor1:Auditory_Factor1:Haptic_Factor1   0.312 0.755360    
+Visual_Factor2:Auditory_Factor1:Haptic_Factor1   0.252 0.801445    
+Visual_Factor3:Auditory_Factor1:Haptic_Factor1  -1.121 0.263023    
+---
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1

@@ -1,0 +1,20 @@
+List of 11
+ $ x          : int 992
+ $ n          : num 1000
+ $ text       : chr "Power for predictor 'Haptic_Factor1'"
+ $ description: chr [1:2] "z-test" "Effect size for Haptic_Factor1 is -0.11"
+ $ pval       : num [1:1000] 6.44e-07 9.82e-06 3.56e-05 9.74e-06 1.15e-06 ...
+ $ alpha      : num 0.05
+ $ nrow       : int 480
+ $ warnings   :'data.frame':	0 obs. of  3 variables:
+  ..$ stage  : chr(0) 
+  ..$ index  : int(0) 
+  ..$ message: chr(0) 
+ $ errors     :'data.frame':	0 obs. of  3 variables:
+  ..$ stage  : chr(0) 
+  ..$ index  : int(0) 
+  ..$ message: chr(0) 
+ $ timing     : 'proc_time' Named num [1:5] 23.765 0.152 24.003 0 0
+  ..- attr(*, "names")= chr [1:5] "user.self" "sys.self" "elapsed" "user.child" ...
+ $ simrTag    : logi TRUE
+ - attr(*, "class")= chr "powerSim"

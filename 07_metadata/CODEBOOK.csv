@@ -1,0 +1,11 @@
+file,field,description
+01_preprocessing/boxcox_lambdas.csv,"DV,lambda,ci_lower,ci_upper,note",Box–Cox λ 与95%CI
+01_preprocessing/indicator_polarity_normalization.csv,"indicator,type,normalization_formula,unit",指标极性与归一化策略
+01_preprocessing/condition_map.csv,"Condition,Visual,Auditory,Haptic",条件映射 4×2×2
+03_models/*/emm_table.csv,"Visual,Auditory,Haptic,emmean,SE,df,lower.CL,upper.CL,scale",EMMs（原量纲）
+03_models/*/pairwise_contrasts.csv,"contrast,estimate,SE,df,t.ratio,p.value.adj,adjust_method",配对比较（含校正方法）
+03_models/*/varcorr.csv,"grouping,term,variance,sd,cor_*",随机效应方差
+03_models/*/effect_sizes.csv,"effect,metric,estimate,ci_lower,ci_upper",主效应效应量及95%CI
+04_ewm/*.csv,scheme/results,EWM与敏感性汇总
+05_power/*/powersim_summary.csv,power summary,功效仿真结果
+06_realworld_interpretation/rt_to_distance_90kmh.csv,"contrast,delta_rt_s,speed_kmh,delta_distance_m",RT换算距离

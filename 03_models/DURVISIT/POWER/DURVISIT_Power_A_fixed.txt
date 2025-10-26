@@ -1,0 +1,12 @@
+Power for predictor 'Auditory_Factor1', (95% confidence interval):
+      100.0% (99.63, 100.0)
+
+Test: z-test
+      Effect size for Auditory_Factor1 is 0.18
+
+Based on 1000 simulations, (0 warnings, 0 errors)
+alpha = 0.05, nrow = 480
+
+Time elapsed: 0 h 0 m 20 s
+
+nb: result might be an observed power calculation

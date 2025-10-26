@@ -1,0 +1,12 @@
+Power for predictor 'Haptic_Factor1', (95% confidence interval):
+      99.20% (98.43, 99.65)
+
+Test: z-test
+      Effect size for Haptic_Factor1 is -0.11
+
+Based on 1000 simulations, (0 warnings, 0 errors)
+alpha = 0.05, nrow = 480
+
+Time elapsed: 0 h 0 m 24 s
+
+nb: result might be an observed power calculation

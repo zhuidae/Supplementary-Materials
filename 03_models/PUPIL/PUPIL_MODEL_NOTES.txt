@@ -1,0 +1,13 @@
+Data file: /Users/zhuixiaolv/Downloads/审稿人数据分析版/shujufenxi/eyes/eye19_tracking_data_for_lmm.csv
+Formula: DV_trans ~ Visual_Factor * Auditory_Factor * Haptic_Factor + 
+Formula:     (1 | Participant_ID)
+Factor levels: V=Baseline|Flashing|Transparent|Transparent_Flashing; A=No|Yes; H=No|Yes
+Contrasts (unordered, ordered): contr.sum, contr.poly
+Random-effects (used): (1 | Participant_ID)
+Optimizer: bobyqa
+Convergence messages: 
+Gradient L2-norm: 1.35856e-07
+Transform: log
+BoxCox lambda: NA
+Shift: 0
+MC policy: mixed

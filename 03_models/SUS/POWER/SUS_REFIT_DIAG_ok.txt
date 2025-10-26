@@ -1,0 +1,1 @@
+doFit.default ok; class= lmerMod

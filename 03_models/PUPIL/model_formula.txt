@@ -1,0 +1,3 @@
+DV_trans ~ Visual_Factor * Auditory_Factor * Haptic_Factor + 
+    (1 | Participant_ID)
+<environment: 0x10ef7c570>

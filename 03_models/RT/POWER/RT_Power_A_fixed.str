@@ -1,0 +1,20 @@
+List of 11
+ $ x          : int 1000
+ $ n          : num 1000
+ $ text       : chr "Power for predictor 'Auditory_Factor1'"
+ $ description: chr [1:2] "z-test" "Effect size for Auditory_Factor1 is 0.066"
+ $ pval       : num [1:1000] 1.09e-18 7.05e-36 1.60e-22 1.49e-29 2.36e-17 ...
+ $ alpha      : num 0.05
+ $ nrow       : int 2221
+ $ warnings   :'data.frame':	0 obs. of  3 variables:
+  ..$ stage  : chr(0) 
+  ..$ index  : int(0) 
+  ..$ message: chr(0) 
+ $ errors     :'data.frame':	0 obs. of  3 variables:
+  ..$ stage  : chr(0) 
+  ..$ index  : int(0) 
+  ..$ message: chr(0) 
+ $ timing     : 'proc_time' Named num [1:5] 115.9 4.1 120.6 0 0
+  ..- attr(*, "names")= chr [1:5] "user.self" "sys.self" "elapsed" "user.child" ...
+ $ simrTag    : logi TRUE
+ - attr(*, "class")= chr "powerSim"

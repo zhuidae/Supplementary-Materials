@@ -1,0 +1,3 @@
+SPEC:
+~Visual_Factor | Haptic_Factor
+ADJ: tukey

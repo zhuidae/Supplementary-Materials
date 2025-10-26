@@ -1,0 +1,8 @@
+Parameter,Eta2_partial,CI,CI_low,CI_high
+Visual_Factor,0.007696631690482108,0.95,0,1
+Auditory_Factor,0.630227511439345,0.95,0.43780222787597334,1
+Haptic_Factor,0.733935549382319,0.95,0.582627827525078,1
+Visual_Factor:Auditory_Factor,0.013299718816193169,0.95,0,1
+Visual_Factor:Haptic_Factor,0.0028350276904999206,0.95,0,1
+Auditory_Factor:Haptic_Factor,0.07277406134388094,0.95,0.03613121245990892,1
+Visual_Factor:Auditory_Factor:Haptic_Factor,0.002927656164290425,0.95,0,1

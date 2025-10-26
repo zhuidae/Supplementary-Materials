@@ -1,0 +1,20 @@
+List of 11
+ $ x          : int 1000
+ $ n          : num 1000
+ $ text       : chr "Power for model comparison"
+ $ description: chr [1:2] "Likelihood ratio" "Comparison to ~. - Auditory_Factor - Visual_Factor:Auditory_Factor - Auditory_Factor:Haptic_Factor - Visual_Fac"| __truncated__
+ $ pval       : num [1:1000] 4.98e-16 2.35e-22 1.40e-18 2.68e-23 4.40e-20 ...
+ $ alpha      : num 0.05
+ $ nrow       : int 474
+ $ warnings   :'data.frame':	0 obs. of  3 variables:
+  ..$ stage  : chr(0) 
+  ..$ index  : int(0) 
+  ..$ message: chr(0) 
+ $ errors     :'data.frame':	0 obs. of  3 variables:
+  ..$ stage  : chr(0) 
+  ..$ index  : int(0) 
+  ..$ message: chr(0) 
+ $ timing     : 'proc_time' Named num [1:5] 67.86 0.72 69.75 0 0
+  ..- attr(*, "names")= chr [1:5] "user.self" "sys.self" "elapsed" "user.child" ...
+ $ simrTag    : logi TRUE
+ - attr(*, "class")= chr "powerSim"

@@ -1,0 +1,7 @@
+Data: data
+Models:
+red: DV_trans ~ Visual_Factor + Auditory_Factor + Haptic_Factor + (1 + Auditory_Factor + Haptic_Factor | Participant_ID) + Visual_Factor:Auditory_Factor + Visual_Factor:Haptic_Factor + Auditory_Factor:Haptic_Factor
+full_ML: f2
+        npar   AIC     BIC logLik -2*log(L)  Chisq Df Pr(>Chisq)
+red       20 -1358 -1243.8 698.97     -1398                     
+full_ML   23 -1355 -1223.7 700.48     -1401 3.0114  3     0.3899

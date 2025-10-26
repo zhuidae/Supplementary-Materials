@@ -1,0 +1,5 @@
+dv,rule_type,params,description
+RT,winsorize,"[0.05,0.95]",Winsorize by quantiles
+TRUST,winsorize,"[0.05,0.95]",Winsorize by quantiles
+SUS,winsorize,"[0.05,0.95]",Winsorize by quantiles
+DALI,winsorize,"[0.05,0.95]",Winsorize by quantiles

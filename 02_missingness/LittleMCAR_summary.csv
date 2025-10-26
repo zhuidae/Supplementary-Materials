@@ -1,0 +1,8 @@
+DV,test_statistic,df,p_value,decision
+DALI,NA,NA,NA,Not-evaluable
+DURVISIT,189,176,0.239,MCAR_not_rejected
+NDRT,NA,NA,NA,Not-evaluable
+PUPIL,209,176,0.0448,MCAR_rejected
+RT,42.5,25,0.016,MCAR_rejected
+SUS,102,67,0.00401,MCAR_rejected
+TRUST,69.3,59,0.169,MCAR_not_rejected

@@ -1,0 +1,5 @@
+effect,df,stat,p_value,method
+Visual_Factor:Auditory_Factor:Haptic_Factor,3,15.70812200458613,0.00130142122829992,LRT
+Visual_Factor:Auditory_Factor,6,31.07178358954343,2.456170777420411e-5,LRT
+Visual_Factor:Haptic_Factor,6,21.217990839948698,0.00167626135712974,LRT
+Auditory_Factor:Haptic_Factor,4,36.69503024249809,2.0816160172580068e-07,LRT

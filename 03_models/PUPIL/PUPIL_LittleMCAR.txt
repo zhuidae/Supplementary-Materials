@@ -1,0 +1,4 @@
+# A tibble: 1 × 4
+  statistic    df p.value missing.patterns
+      <dbl> <dbl>   <dbl>            <int>
+1      209.   176  0.0448               16

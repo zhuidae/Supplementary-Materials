@@ -1,0 +1,8 @@
+DV,total_trials,valid_trials,excluded_trials,retention_rate,participants_n,median_trials_per_participant,q1,q3
+DALI,480,480,0,1,30,16,16,16
+DURVISIT,480,416,64,0.8666666666666667,30,16,16,16
+NDRT,480,480,0,1,30,16,16,16
+PUPIL,480,416,64,0.8666666666666667,30,16,16,16
+RT,2221,2221,0,1,30,77.5,73.5,79.75
+SUS,467,467,0,1,30,16,16,16
+TRUST,474,474,0,1,30,16,16,16

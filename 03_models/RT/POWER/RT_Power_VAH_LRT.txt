@@ -1,0 +1,12 @@
+Power for model comparison, (95% confidence interval):
+      26.90% (24.17, 29.76)
+
+Test: Likelihood ratio
+      Comparison to ~. - Visual_Factor:Auditory_Factor:Haptic_Factor + [re]
+
+Based on 1000 simulations, (0 warnings, 0 errors)
+alpha = 0.05, nrow = 2221
+
+Time elapsed: 0 h 3 m 43 s
+
+nb: result might be an observed power calculation

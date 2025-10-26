@@ -1,0 +1,3 @@
+doFit.default error: Assigned data `y` must be compatible with existing data. 
+TRACE:
+ No traceback available 

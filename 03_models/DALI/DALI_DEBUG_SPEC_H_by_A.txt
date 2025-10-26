@@ -1,0 +1,3 @@
+SPEC:
+~Haptic_Factor | Auditory_Factor
+ADJ: holm

@@ -1,0 +1,17 @@
+Condition,Visual,Auditory,Haptic
+V:Baseline|A:No|H:No,Baseline,No,No
+V:Baseline|A:No|H:Yes,Baseline,No,Yes
+V:Baseline|A:Yes|H:No,Baseline,Yes,No
+V:Baseline|A:Yes|H:Yes,Baseline,Yes,Yes
+V:Flashing|A:No|H:No,Flashing,No,No
+V:Flashing|A:No|H:Yes,Flashing,No,Yes
+V:Flashing|A:Yes|H:No,Flashing,Yes,No
+V:Flashing|A:Yes|H:Yes,Flashing,Yes,Yes
+V:Transparent|A:No|H:No,Transparent,No,No
+V:Transparent|A:No|H:Yes,Transparent,No,Yes
+V:Transparent|A:Yes|H:No,Transparent,Yes,No
+V:Transparent|A:Yes|H:Yes,Transparent,Yes,Yes
+V:Transparent_Flashing|A:No|H:No,Transparent_Flashing,No,No
+V:Transparent_Flashing|A:No|H:Yes,Transparent_Flashing,No,Yes
+V:Transparent_Flashing|A:Yes|H:No,Transparent_Flashing,Yes,No
+V:Transparent_Flashing|A:Yes|H:Yes,Transparent_Flashing,Yes,Yes

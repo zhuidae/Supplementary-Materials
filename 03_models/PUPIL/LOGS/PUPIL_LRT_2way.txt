@@ -1,0 +1,28 @@
+=== LRT VA ===
+Data: data
+Models:
+red: DV_trans ~ Visual_Factor + Auditory_Factor + Haptic_Factor + (1 | Participant_ID) + Visual_Factor:Haptic_Factor + Auditory_Factor:Haptic_Factor
+full_ML: f2
+        npar     AIC     BIC logLik -2*log(L)  Chisq Df Pr(>Chisq)    
+red       12 -907.83 -859.46 465.91   -931.83                         
+full_ML   18 -919.66 -847.10 477.83   -955.66 23.831  6  0.0005611 ***
+---
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+=== LRT VH ===
+Data: data
+Models:
+red: DV_trans ~ Visual_Factor + Auditory_Factor + Haptic_Factor + (1 | Participant_ID) + Visual_Factor:Auditory_Factor + Auditory_Factor:Haptic_Factor
+full_ML: f2
+        npar     AIC     BIC logLik -2*log(L)  Chisq Df Pr(>Chisq)
+red       12 -926.90 -878.53 475.45   -950.90                     
+full_ML   18 -919.66 -847.10 477.83   -955.66 4.7609  6     0.5748
+
+=== LRT AH ===
+Data: data
+Models:
+red: DV_trans ~ Visual_Factor + Auditory_Factor + Haptic_Factor + (1 | Participant_ID) + Visual_Factor:Auditory_Factor + Visual_Factor:Haptic_Factor
+full_ML: f2
+        npar     AIC     BIC logLik -2*log(L)  Chisq Df Pr(>Chisq)
+red       14 -925.89 -869.46 476.95   -953.89                     
+full_ML   18 -919.66 -847.10 477.83   -955.66 1.7627  4     0.7793

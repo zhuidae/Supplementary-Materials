@@ -1,0 +1,1 @@
+Policy: Tukey for multi-level factors; Holm for 2x2 simple-effects families.
