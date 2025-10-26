@@ -1,0 +1,1255 @@
+
+# ======================================================================
+# TOR Final Analysis Pipeline (merged: manuscript-aligned + reviewer add-ons)
+# Author: jinchenggong
+# Date: 2025-10-22
+# Purpose:
+#   - One-click pipeline for 7 DVs (RT, Trust, SUS, DALI, NDRT, DURVISIT, PUPIL)
+#   - Aligns with manuscript methods (random-effects per DV, transforms, back-transform)
+#   - Adds reviewer-requested diagnostics, missingness reports, MC policy logs
+#   - Provides EWM sensitivity analyses and safety trade-off computations
+# ======================================================================
+
+# ---------------------------- Packages ---------------------------------
+required_packages <- c(
+  "lme4","lmerTest","emmeans","effectsize","performance",
+  "dplyr","readr","readxl","tidyr","purrr","stringr","broom.mixed",
+  "MASS","ggplot2"
+)
+missing <- required_packages[!vapply(required_packages, requireNamespace, quietly=TRUE, FUN.VALUE=logical(1))]
+if (length(missing) > 0) {
+  stop(paste0(
+    "Missing packages: ", paste(missing, collapse=", "),
+    "\nPlease install them, e.g.:\n  install.packages(c('",
+    paste(missing, collapse="','"), "'))\nThen re-run."
+  ))
+}
+
+suppressPackageStartupMessages({
+  library(lme4); library(lmerTest); library(emmeans); library(effectsize); library(performance)
+  library(dplyr); library(readr); library(readxl); library(tidyr); library(purrr); library(stringr); library(broom.mixed)
+  library(MASS); library(ggplot2)
+})
+
+options(stringsAsFactors = FALSE)
+options(contrasts = c("contr.sum", "contr.poly"))
+
+# 统一拟合控制（功效分析与模型一致）
+.lmer_ctrl <- lme4::lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 200000))
+
+# ---------------------------- Config -----------------------------------
+OUTPUT_ROOT <- "/Users/zhuixiaolv/Downloads/审稿人数据分析版"       # change if needed
+POWER_RUN   <- FALSE                  # temporarily disable power analysis for faster LRT/MCAR regeneration
+POWER_NSIM  <- 1000
+set.seed(20231031)
+
+# Multiple-comparison policy (reviewer-justified):
+# "mixed" = Tukey for multi-level (e.g., Visual 4-level), Holm/none for small 2x2 simple effects
+MC_POLICY <- "mixed"    # or "tukey_only"
+
+# Default p-adjust for pairwise when "mixed" requires a choice:
+ADJ_TUKEY <- "tukey"
+ADJ_HOLM  <- "holm"
+ADJ_NONE  <- "none"
+
+EPS_LOGIT <- 1e-5
+
+# Pre-filled paths/columns from your earlier scripts (edit as needed)
+CONFIG <- tibble::tribble(
+  ~dv_code,  ~dv_label,             ~domain, ~input_path,                                                                 ~dv_col,                        ~id_col,          ~vis_col,         ~aud_col,          ~hap_col,          ~transform, ~winsorize,        ~target_random, 
+  "RT",      "Reaction Time",       "rt",    "/Users/zhuixiaolv/Downloads/审稿人数据分析版/shujufenxi/time/shiyanshuju_modified_by_rules_xx.xlsx",    "Reaction_Time_Success",     "Participant_ID", "Visual_Factor",  "Auditory_Factor", "Haptic_Factor",  "boxcox",   c(0.05, 0.95),        "aud+hap", 
+  "TRUST",   "Trust Score",         "trust", "/Users/zhuixiaolv/Downloads/审稿人数据分析版/shujufenxi/xinren/subjective_data_xinren_cleaned_IQR.xlsx","Trust_Score",               "Participant_ID", "Visual_Factor",  "Auditory_Factor", "Haptic_Factor",  "boxcox",   c(0.05, 0.95),        "aud+hap", 
+  "SUS",     "System Usability",    "sus",   "/Users/zhuixiaolv/Downloads/审稿人数据分析版/shujufenxi/SUS/sus_data_processed.xlsx",                   "Final_SUS_Score",           "Participant_ID", "Visual_Factor",  "Auditory_Factor", "Haptic_Factor",  "boxcox",   c(0.05, 0.95),        "aud+hap", 
+  "DALI",    "Workload (DALI)",     "dali",  "/Users/zhuixiaolv/Downloads/审稿人数据分析版/shujufenxi/dali/processed_dali_data_for_lmm.csv",           "Total_DALI_Score",          "Participant_ID", "Visual_Factor",  "Auditory_Factor", "Haptic_Factor",  "boxcox",   c(0.05, 0.95),        "aud+hap", 
+  "NDRT",    "Percent Time NDRT",   "eye",   "/Users/zhuixiaolv/Downloads/审稿人数据分析版/shujufenxi/eyes/eye19_tracking_data_for_lmm.csv",           "Percent_Time_NDRT",         "Participant_ID", "Visual_Factor",  "Auditory_Factor", "Haptic_Factor",  "elogit",   NULL,                 "aud", 
+  "DURVISIT","Avg Visit Duration",  "eye",   "/Users/zhuixiaolv/Downloads/审稿人数据分析版/shujufenxi/eyes/eye19_tracking_data_for_lmm.csv",           "Agg_Avg_Dur_Visit_HMI",     "Participant_ID", "Visual_Factor",  "Auditory_Factor", "Haptic_Factor",  "log",      NULL,                 "intercept", 
+  "PUPIL",   "Avg Pupil (wFixDur)", "eye",   "/Users/zhuixiaolv/Downloads/审稿人数据分析版/shujufenxi/eyes/eye19_tracking_data_for_lmm.csv",           "Agg_Avg_Pupil_HMI_wFixDur", "Participant_ID", "Visual_Factor",  "Auditory_Factor", "Haptic_Factor",  "log",      NULL,                 "intercept" 
+)
+
+# Fixed Box-Cox lambda overrides (per manuscript; NA means auto-estimate)
+LAMBDA_OVERRIDE <- c(RT = -0.100, TRUST = NA, SUS = NA, DALI = NA,
+                     NDRT = NA, DURVISIT = NA, PUPIL = NA)
+
+# Directions for EWM ("TRUE": higher better; "FALSE": lower better)
+EWM_DIRECTIONS <- c(RT = FALSE, NDRT = FALSE, DALI = FALSE, TRUST = TRUE, SUS = TRUE, DURVISIT = FALSE, PUPIL = FALSE)
+EWM_GROUPS <- list(subjective = c("TRUST","DALI","SUS"), objective = c("RT","NDRT","DURVISIT","PUPIL"))
+
+# ----------------------- Helpers: IO & Factors --------------------------
+# 让 *_Success 列名自动映射回真实列名（与你单脚本一致） 
+normalize_dv_col <- function(dat, dv){ 
+  if (dv %in% names(dat)) return(dv) 
+  map <- c("Trust_Score_Success" = "Trust_Score", 
+           "SUS_Score_Success"   = "Final_SUS_Score", 
+           "DALI_Score_Success"  = "Total_DALI_Score") 
+  alt <- unname(map[dv]) 
+  if (!is.na(alt) && alt %in% names(dat)) return(alt) 
+  base <- sub("_Success$", "", dv) 
+  if (base %in% names(dat)) return(base) 
+  stop("DV column not in data: ", dv) 
+} 
+
+# 将可能的 NULL/长度0 安全转成标量 NA_real_ 
+as_scalar_na <- function(x){ 
+  if (is.null(x) || length(x) == 0) return(NA_real_) 
+  as.numeric(x[1]) 
+} 
+
+dir_create <- function(path) { 
+  stopifnot(length(path) == 1L, !is.na(path)) 
+  if (!dir.exists(path)) dir.create(path, recursive = TRUE, showWarnings = FALSE)
+  invisible(path) 
+}
+write_txt <- function(lines, path) { dir_create(dirname(path)); writeLines(lines, path, useBytes = TRUE) }
+save_csv  <- function(df, path)    { dir_create(dirname(path)); readr::write_csv(df, path) }
+
+read_any <- function(path) {
+  ext <- tolower(gsub(".*\\.", "", path))
+  if (ext %in% c("csv"))  return(suppressMessages(readr::read_csv(path, show_col_types = FALSE)))
+  if (ext %in% c("xlsx","xls")) return(suppressMessages(readxl::read_excel(path)))
+  if (ext %in% c("txt")) return(suppressMessages(readr::read_delim(path, show_col_types = FALSE)))
+  stop("Unsupported file extension: ", ext)
+}
+
+map_visual <- function(x){
+  dplyr::case_when(
+    stringr::str_detect(x, "路况闪烁") ~ "Transparent_Flashing",
+    stringr::str_detect(x, "路况")     ~ "Transparent",
+    stringr::str_detect(x, "闪烁")     ~ "Flashing",
+    stringr::str_detect(x, "基线")     ~ "Baseline",
+    TRUE ~ NA_character_
+  )
+}
+
+ensure_factors <- function(df, id_col, vis_col, aud_col, hap_col){
+  # synthesize from TOR_Type if needed
+  if (!(vis_col %in% names(df)) || !(aud_col %in% names(df)) || !(hap_col %in% names(df))) {
+    if ("TOR_Type" %in% names(df)) {
+      df <- df %>% mutate(
+        !!aud_col := factor(ifelse(stringr::str_detect(TOR_Type, "听"), "Yes", "No"), levels=c("No","Yes")),
+        !!hap_col := factor(ifelse(stringr::str_detect(TOR_Type, "触"), "Yes", "No"), levels=c("No","Yes")),
+        Visual_Factor_Temp = map_visual(TOR_Type),
+        !!vis_col := factor(Visual_Factor_Temp, levels=c("Baseline","Flashing","Transparent","Transparent_Flashing"))
+      )
+    } else {
+      stop("Missing factor columns and TOR_Type not present to synthesize factors.")
+    }
+  }
+  df[[id_col]]  <- as.factor(df[[id_col]])
+  df[[vis_col]] <- as.factor(df[[vis_col]])
+  df[[aud_col]] <- as.factor(df[[aud_col]])
+  df[[hap_col]] <- as.factor(df[[hap_col]])
+  df
+}
+
+# ----------------------- Helper: Summary Report Generator -------------------------- 
+generate_summary_report <- function(summaries_list, ewm_spearman_df, out_path) { 
+  as_scalar_na <- function(x) { 
+    if (is.null(x) || length(x) == 0) return(NA_real_) 
+    as.numeric(x)[1] 
+  } 
+  
+  report <- c() 
+  
+  # --- Header --- 
+  report <- c(report, "# Analysis Pipeline: Summary Report", 
+              "---", 
+              paste("Report generated on:", Sys.time()), 
+              "") 
+
+  # --- Section 1: LMM Model Specifications --- 
+  report <- c(report, "## 1. Linear Mixed-Effects Model (LMM) Specifications", "") 
+  for (s in summaries_list) { 
+    line <- sprintf("* **%s**: Final model included random effects: `%s`", 
+                    s$dv_code, s$random_effect_spec) 
+    report <- c(report, line) 
+  } 
+  report <- c(report, "") 
+
+  # --- Section 2: Missing Data Assessment (Little's MCAR Test) --- 
+  report <- c(report, "## 2. Missing Data Assessment", "") 
+  for (s in summaries_list) { 
+    if (!is.na(s$mcar_p_value)) { 
+      interpretation <- ifelse(s$mcar_p_value >= 0.05, 
+                               "(p >= .05, assumption of MCAR is met)", 
+                               "**(Warning: p < .05, data may not be Missing Completely at Random)**") 
+      line <- sprintf("* **%s**: Little's MCAR test p-value = %.4f %s", 
+                      s$dv_code, s$mcar_p_value, interpretation) 
+      report <- c(report, line) 
+    } else { 
+      report <- c(report, sprintf("* **%s**: Little's MCAR test was not run (e.g., no missing data or package unavailable).", s$dv_code)) 
+    } 
+  } 
+  report <- c(report, "") 
+  
+  # --- Section 3: Post-Hoc Power Analysis (via simr) --- 
+  report <- c(report, "## 3. Post-Hoc Power Analysis Summary", "") 
+  if (length(summaries_list) > 0) {
+    for (s in summaries_list) { 
+      ps_path <- file.path(OUTPUT_ROOT, s$dv_code, paste0(s$dv_code, "_PowerSim.csv")) 
+      ps <- tryCatch(suppressMessages(readr::read_csv(ps_path, show_col_types = FALSE)), error = function(e) NULL) 
+      if (!is.null(ps) && nrow(ps) > 0) { 
+        main_effects <- c("Visual_Factor","Auditory_Factor","Haptic_Factor") 
+        two_way <- c("Visual_Factor:Auditory_Factor","Visual_Factor:Haptic_Factor","Auditory_Factor:Haptic_Factor") 
+        top_inter <- paste(main_effects, collapse=":") 
+        keep_terms <- intersect(c(main_effects, two_way, top_inter), ps$term) 
+        ps2 <- ps[ps$term %in% keep_terms, , drop=FALSE] 
+        summaries <- paste(sprintf("%s (Power=%.1f%%)", ps2$term, as.numeric(ps2$power) * 100), collapse="; ") 
+        report <- c(report, sprintf("* **%s**: %s", s$dv_code, summaries)) 
+      } else if (!is.null(s$power_summary) && length(s$power_summary) == 1 &&
+                 !identical(s$power_summary, "Power analysis not run or 'simr' package not installed.")) { 
+        report <- c(report, sprintf("* **%s**: %s", s$dv_code, s$power_summary)) 
+      } else { 
+        report <- c(report, sprintf("* **%s**: Power analysis disabled (POWER_RUN=FALSE) or unavailable.", s$dv_code)) 
+      } 
+    } 
+  } else if (exists("CONFIG")) {
+    for (dv_code in CONFIG$dv_code) {
+      ps_path <- file.path(OUTPUT_ROOT, dv_code, paste0(dv_code, "_PowerSim.csv"))
+      ps <- tryCatch(suppressMessages(readr::read_csv(ps_path, show_col_types = FALSE)), error = function(e) NULL)
+      if (!is.null(ps) && nrow(ps) > 0) {
+        main_effects <- c("Visual_Factor","Auditory_Factor","Haptic_Factor")
+        two_way <- c("Visual_Factor:Auditory_Factor","Visual_Factor:Haptic_Factor","Auditory_Factor:Haptic_Factor")
+        top_inter <- paste(main_effects, collapse=":")
+        keep_terms <- intersect(c(main_effects, two_way, top_inter), ps$term)
+        ps2 <- ps[ps$term %in% keep_terms, , drop=FALSE]
+        summaries <- paste(sprintf("%s (Power=%.1f%%)", ps2$term, as.numeric(ps2$power) * 100), collapse="; ")
+        report <- c(report, sprintf("* **%s**: %s", dv_code, summaries))
+      } else {
+        report <- c(report, sprintf("* **%s**: Power analysis disabled (POWER_RUN=FALSE) or unavailable.", dv_code))
+      }
+    }
+  }
+  report <- c(report, "") 
+
+  # --- Section 4: EWM Ranking Sensitivity --- 
+  report <- c(report, "## 4. EWM Ranking Sensitivity Analysis", 
+              "Spearman rank correlation (Rho) between different weighting methods.", "") 
+  if (!is.null(ewm_spearman_df) && nrow(ewm_spearman_df) > 0) { 
+    report <- c(report, "| Comparison                 | Spearman's Rho |") 
+    report <- c(report, "|:---------------------------|:---------------|") 
+    for (i in 1:nrow(ewm_spearman_df)) { 
+      line <- sprintf("| %-26s | %.4f         |", 
+                      ewm_spearman_df$pair[i], ewm_spearman_df$spearman[i]) 
+      report <- c(report, line) 
+    } 
+  } else { 
+    report <- c(report, "EWM sensitivity analysis data not available.") 
+  } 
+  
+  # --- Write file --- 
+  writeLines(report, out_path) 
+}
+
+# ----------------------- Helpers: transforms ----------------------------
+winsorize_vec <- function(x, probs=c(0.01, 0.99)) {
+  if (is.null(probs)) return(x)
+  q <- stats::quantile(x, probs = probs, na.rm = TRUE, names = FALSE, type = 7)
+  x[x < q[1]] <- q[1]; x[x > q[2]] <- q[2]; x
+}
+
+estimate_boxcox_lambda <- function(y) {
+  y_local <- y; miny <- min(y_local, na.rm = TRUE); shift <- 0
+  if (miny <= 0) { y_local <- y_local - miny + 1e-6; shift <- -miny + 1e-6 }
+  # 使用全局环境创建临时数据框
+  assign("temp_boxcox_data", data.frame(y_var = y_local), envir = .GlobalEnv)
+  bc <- MASS::boxcox(stats::lm(y_var ~ 1, data = temp_boxcox_data), plotit = FALSE, lambda = seq(-2, 2, by = 0.05))
+  # 清理临时数据
+  if (exists("temp_boxcox_data", envir = .GlobalEnv)) {
+    rm(temp_boxcox_data, envir = .GlobalEnv)
+  }
+  lam <- bc$x[which.max(bc$y)]
+  list(lambda = lam, shift = shift)
+}
+
+elogit_01 <- function(p){
+  N <- length(p)
+  p_adj <- ((p) * (N - 1) + 0.5) / N
+  log(p_adj / (1 - p_adj))
+}
+
+apply_transform <- function(y, transform, dv_code) {
+  info <- list(transform = transform, lambda = NA_real_, shift = 0, dv_code = dv_code)
+  if (transform == "identity") {
+    yt <- y
+  } else if (transform == "log") {
+    miny <- min(y, na.rm=TRUE); shift <- ifelse(miny <= 0, -miny + 1e-6, 0)
+    yt <- log(y + shift); info$shift <- shift
+  } else if (transform == "elogit") {
+    # Expect y in [0,1] (convert from percent before calling)
+    yt <- elogit_01(y)
+  } else if (transform == "boxcox") {
+    # 安全地访问LAMBDA_OVERRIDE，避免subscript out of bounds错误
+    lam <- if (dv_code %in% names(LAMBDA_OVERRIDE)) {
+      LAMBDA_OVERRIDE[[dv_code]]
+    } else {
+      NA_real_  # 如果dv_code不存在，默认使用自动估计
+    }
+    
+    if (is.na(lam)) {
+      est <- estimate_boxcox_lambda(y)
+      lam <- est$lambda
+      shift <- est$shift
+    } else {
+      shift <- 0
+    }
+    y2 <- y + shift
+    yt <- if (abs(lam) < 1e-8) log(y2) else (y2^lam - 1) / lam
+    info$lambda <- lam; info$shift <- shift
+  } else {
+    stop("Unknown transform: ", transform)
+  }
+  attr(yt, "transform_info") <- info
+  yt
+}
+
+make_emm_tran <- function(transform_info) {
+  tr <- transform_info$transform
+  if (tr == "identity") return(NULL)
+  if (tr == "log")    return(emmeans::make.tran("log"))
+  if (tr == "elogit") return(emmeans::make.tran("logit"))
+  if (tr == "boxcox") return(emmeans::make.tran("boxcox", transform_info$lambda))
+  stop("Unsupported transform in make_emm_tran: ", tr)
+}
+
+# ------------------ Helpers: power analysis ----------------------------
+# 1) 动态匹配系数名（不硬编码）
+find_coef <- function(model, factor_prefix){
+  coefs <- names(lme4::fixef(model))
+  hit <- grep(paste0("^", factor_prefix, "($|[:_])|^", factor_prefix, "(Yes|1|TRUE)"), coefs, value = TRUE)
+  if (length(hit) == 0) stop("Coefficient not found for prefix: ", factor_prefix,
+                             "\nfixef(model): ", paste(coefs, collapse=", "))
+  hit[1]
+}
+
+# 2) 生成“严格嵌套”的 LRT 对比（把被测项及其更高阶交互一起从 full 模型中删除）
+make_fcompare_formula <- function(drop_terms, factors){
+  all_drops <- drop_terms
+  # 主效应需一并去掉相关更高阶项
+  if (any(drop_terms %in% c(factors$V, factors$A, factors$H))){
+    f <- unique(unlist(strsplit(drop_terms, ":", fixed=TRUE)))
+    if (factors$V %in% f){
+      all_drops <- c(all_drops, paste(factors$V, factors$A, sep=":"),
+                                  paste(factors$V, factors$H, sep=":"),
+                                  paste(factors$V, factors$A, factors$H, sep=":"))
+    }
+    if (factors$A %in% f){
+      all_drops <- c(all_drops, paste(factors$V, factors$A, sep=":"),
+                                  paste(factors$A, factors$H, sep=":"),
+                                  paste(factors$V, factors$A, factors$H, sep=":"))
+    }
+    if (factors$H %in% f){
+      all_drops <- c(all_drops, paste(factors$V, factors$H, sep=":"),
+                                  paste(factors$A, factors$H, sep=":"),
+                                  paste(factors$V, factors$A, factors$H, sep=":"))
+    }
+  } else {
+    # 二阶交互需一并去掉三阶
+    two_way_sets <- list(c(factors$V,factors$A), c(factors$V,factors$H), c(factors$A,factors$H))
+    d <- unique(unlist(strsplit(drop_terms, ":", fixed=TRUE)))
+    for (s in two_way_sets){
+      if (identical(sort(d), sort(s))) {
+        all_drops <- c(all_drops, paste(factors$V, factors$A, factors$H, sep=":"))
+      }
+    }
+  }
+  all_drops <- unique(all_drops)
+  as.formula(paste("~ . -", paste(all_drops, collapse=" - ")))
+}
+
+# 3) 封装两类功效检验
+power_lrt <- function(full_ml, drop_terms, factors, nsim=1000){
+  fm <- make_fcompare_formula(drop_terms, factors)
+  simr::powerSim(full_ml, test = simr::fcompare(fm), nsim = nsim, progress = FALSE)
+}
+power_fixed <- function(full_ml, factor_prefix, nsim=1000){
+  cf <- find_coef(full_ml, factor_prefix)
+  # 使用 z 检验避免 lmerTest Satterthwaite 在模拟中频繁报错
+  simr::powerSim(full_ml, test = simr::fixed(cf, method = "z"), nsim = nsim, progress = FALSE)
+}
+
+# ------------------ Helpers: random-effects strategy --------------------
+# Target structures per DV (as in manuscript):
+#   "aud+hap"   -> (1 + Auditory + Haptic | ID)
+#   "aud"       -> (1 + Auditory | ID)
+#   "intercept" -> (1 | ID)
+fit_lmm_with_target <- function(fixed_formula, data, id_col, aud_col, hap_col, target) {
+  candidates <- switch(target,
+    "aud+hap"   = c(paste0("(1 + ", aud_col, " + ", hap_col, " | ", id_col, ")"),
+                    paste0("(1 + ", aud_col, " | ", id_col, ")"),
+                    paste0("(1 | ", id_col, ")")),
+    "aud"       = c(paste0("(1 + ", aud_col, " | ", id_col, ")"),
+                    paste0("(1 | ", id_col, ")")),
+    "intercept" = c(paste0("(1 | ", id_col, ")")),
+    c(paste0("(1 | ", id_col, ")"))
+  )
+  errs <- list()
+  for (re in candidates) {
+    f2 <- as.formula(paste0(deparse(fixed_formula), " + ", re))
+    ok <- TRUE; fit <- NULL
+    tryCatch({
+      fit <- lmer(f2, data = data, REML = TRUE,
+                  control = lmerControl(check.conv.singular = "ignore",
+                                        optimizer = "bobyqa",
+                                        optCtrl = list(maxfun = 2e5)))
+      if (isSingular(fit, tol = 1e-4) && re != tail(candidates, 1)) stop("Singular fit for: ", re)
+    }, error = function(e) { ok <<- FALSE; errs[[re]] <<- conditionMessage(e) })
+    if (ok) return(list(fit=fit, used=re, errors=errs))
+  }
+  stop("All random-effects specifications failed. Errors:\n",
+       paste(names(errs), unlist(errs), sep=" :: ", collapse="\n"))
+}
+
+# ------------------ Reviewer add-ons: diagnostics -----------------------
+export_boxcox_profile <- function(y, out_png, lambdas = seq(-2, 2, by=0.05)){
+  y_local <- y; miny <- min(y_local, na.rm=TRUE); shift <- 0
+  if (miny <= 0) { y_local <- y_local - miny + 1e-6; shift <- -miny + 1e-6 }
+  # 使用全局环境创建临时数据框
+  assign("temp_profile_data", data.frame(y_var = y_local), envir = .GlobalEnv)
+  bc <- MASS::boxcox(lm(y_var ~ 1, data = temp_profile_data), plotit = FALSE, lambda = lambdas)
+  # 清理临时数据
+  if (exists("temp_profile_data", envir = .GlobalEnv)) {
+    rm(temp_profile_data, envir = .GlobalEnv)
+  }
+  df <- tibble(lambda = bc$x, loglik = bc$y)
+  best <- df %>% slice_max(loglik, n=1)
+  p <- ggplot(df, aes(lambda, loglik)) + geom_line() + geom_point(data=best) +
+       ggtitle(sprintf("Box-Cox profile (shift=%.6f), best λ=%.3f", shift, best$lambda))
+  ggsave(out_png, p, width=6, height=4, dpi=300)
+  invisible(best$lambda)
+}
+
+export_lmm_diagnostics <- function(model, out_prefix){
+  df <- data.frame(fitted = fitted(model), resid = resid(model, type="pearson"))
+  p1 <- ggplot(df, aes(resid)) + geom_histogram(bins=40) + ggtitle("Residuals histogram")
+  p2 <- ggplot(df, aes(sample = resid)) + stat_qq() + stat_qq_line() + ggtitle("QQ plot")
+  p3 <- ggplot(df, aes(fitted, resid)) + geom_point(alpha=.5) + geom_hline(yintercept=0, linetype=2) + ggtitle("Residuals vs Fitted")
+  ggsave(paste0(out_prefix, "_resid_hist.png"), p1, width=5, height=4, dpi=300)
+  ggsave(paste0(out_prefix, "_qq.png"), p2, width=5, height=4, dpi=300)
+  ggsave(paste0(out_prefix, "_rvf.png"), p3, width=5, height=4, dpi=300)
+  # collinearity & singularity
+  summ <- performance::check_collinearity(model)
+  capture.output(summ, file = paste0(out_prefix, "_collinearity.txt"))
+  write_txt(sprintf("isSingular: %s", lme4::isSingular(model, tol=1e-4)), paste0(out_prefix, "_singularity.txt"))
+  invisible(TRUE)
+}
+
+export_varcorr_table <- function(model, out_csv){
+  vc <- as.data.frame(VarCorr(model))
+  save_csv(vc, out_csv)
+}
+
+report_missingness <- function(df, id_col, cond_cols, dv_col, out_prefix){
+  tab <- df %>%
+    mutate(have = !is.na(.data[[dv_col]])) %>%
+    group_by(.data[[id_col]], across(all_of(cond_cols))) %>%
+    summarise(n = n(), have = sum(have), .groups="drop") %>%
+    mutate(retention_rate = have / n)
+  save_csv(tab, paste0(out_prefix, "_trial_counts_by_condition.csv"))
+  part <- tab %>% group_by(.data[[id_col]]) %>% summarise(trials = sum(n), observed = sum(have), retention = observed/trials, .groups="drop")
+  save_csv(part, paste0(out_prefix, "_participant_retention.csv"))
+  # Build wide matrix for MCAR across conditions
+  wide <- df %>% 
+    mutate(cond = interaction(across(all_of(cond_cols)), drop = TRUE)) %>% 
+    group_by(.data[[id_col]], cond) %>%
+    summarise(value = suppressWarnings(as.numeric(mean(.data[[dv_col]], na.rm = FALSE))), .groups = "drop") %>%
+    tidyr::pivot_wider(names_from = cond, values_from = value) 
+
+  datM <- as.data.frame(wide[, -1, drop = FALSE]) 
+  datM <- as.data.frame(lapply(datM, function(z) suppressWarnings(as.numeric(z)))) 
+  non_empty <- which(colSums(!is.na(datM)) > 0) 
+  if (length(non_empty) >= 2) { 
+    datM <- datM[, non_empty, drop = FALSE] 
+  } 
+
+  has_enough_cols <- is.data.frame(datM) && ncol(datM) >= 2 
+  has_enough_rows <- nrow(datM) >= 5 
+  has_variation   <- all(vapply(datM, function(col) sd(col, na.rm = TRUE), 0) > 0, na.rm = TRUE) 
+  # 缺失模式数量（按参与者的缺失图样）
+  pattern_count <- tryCatch(nrow(unique(as.data.frame(is.na(datM)))), error = function(e) NA_integer_)
+  if (is.na(pattern_count)) pattern_count <- 0
+
+  assessable <- has_enough_cols && has_enough_rows && has_variation && (pattern_count >= 2)
+
+  if (assessable) { 
+    if (requireNamespace("BaylorEdPsych", quietly = TRUE)) { 
+      mcar <- tryCatch(BaylorEdPsych::LittleMCAR(as.matrix(datM)), error = function(e) e) 
+      if (inherits(mcar, "error")) { 
+        write_txt(paste("LittleMCAR failed:", conditionMessage(mcar)), paste0(out_prefix, "_LittleMCAR.txt")) 
+      } else { 
+        # 若统计量的df<1，标为不可评估
+        df_val <- NA_integer_
+        p_val <- NA_real_
+        if ("df" %in% names(mcar)) df_val <- as.integer(mcar$df)
+        if ("p.value" %in% names(mcar)) p_val <- as.numeric(mcar$p.value)
+        if (!is.na(df_val) && df_val < 1) {
+          write_txt("MCAR 不可评估：df<1 或缺失模式不足。", paste0(out_prefix, "_LittleMCAR.txt"))
+        } else {
+          capture.output(mcar, file = paste0(out_prefix, "_LittleMCAR.txt")) 
+        }
+      } 
+    } else if (requireNamespace("naniar", quietly = TRUE)) { 
+      mcar <- tryCatch(naniar::mcar_test(datM), error=function(e) e) 
+      if (inherits(mcar, "error")) { 
+        write_txt(paste("naniar::mcar_test failed:", conditionMessage(mcar)), paste0(out_prefix, "_LittleMCAR.txt")) 
+      } else { 
+        # 若返回结构无法提供df或缺失模式不足，标为不可评估
+        pv <- NULL 
+        if ("p.value" %in% names(mcar)) pv <- mcar$p.value 
+        if (is.null(pv) && "p_value" %in% names(mcar)) pv <- mcar$p_value 
+        if (pattern_count < 2) {
+          write_txt("MCAR 不可评估：缺失模式仅1种。", paste0(out_prefix, "_LittleMCAR.txt"))
+        } else {
+          capture.output(mcar, file = paste0(out_prefix, "_LittleMCAR.txt")) 
+        }
+      } 
+    } else { 
+      write_txt("MCAR test skipped: packages unavailable (BaylorEdPsych/naniar).", paste0(out_prefix, "_LittleMCAR.txt")) 
+    } 
+  } else { 
+    write_txt("MCAR 不可评估：变量数不足、样本数不足、零方差或缺失模式不足。", paste0(out_prefix, "_LittleMCAR.txt")) 
+  }
+  invisible(TRUE)
+}
+
+write_mcadj_policy <- function(dv_code, text, out_dir){
+  path <- file.path(out_dir, sprintf("%s_MCADJ_POLICY.txt", dv_code)); write_txt(text, path)
+}
+
+rt_delta_to_distance_m <- function(delta, speed_kmh = 90, units = c("s","ms")){ 
+  units <- match.arg(units) 
+  v_ms <- speed_kmh / 3.6 
+  dt   <- if (units == "ms") delta/1000 else delta 
+  v_ms * dt 
+} 
+
+add_distance_delta <- function(contrasts_df, speed_kmh = 90, estimate_col = "estimate", rt_units = "s"){ 
+  if (!estimate_col %in% names(contrasts_df)) stop("estimate column not found") 
+  contrasts_df %>% 
+    dplyr::mutate(delta_distance_m = rt_delta_to_distance_m(!!as.name(estimate_col), speed_kmh, rt_units)) 
+}
+
+# ----------------------- EWM Sensitivity --------------------------------
+normalize_minmax <- function(x){
+  rng <- range(x, na.rm = TRUE); if (diff(rng) == 0) return(rep(0.5, length(x)))
+  (x - rng[1]) / diff(rng)
+}
+entropy_weights <- function(mat){
+  eps <- 1e-12; P <- sweep(mat + eps, 2, colSums(mat + eps), "/")
+  k <- 1/log(nrow(mat)); e <- -k * colSums(P * log(P)); d <- 1 - e; as.numeric(d / sum(d))
+}
+ewm_score <- function(metrics_df, directions){
+  metr <- setdiff(names(metrics_df), "condition"); df <- metrics_df
+  for (nm in metr) if (!directions[[nm]]) df[[nm]] <- -df[[nm]]
+  M <- as.matrix(df[, metr]); Mnorm <- apply(M, 2, normalize_minmax); w <- entropy_weights(Mnorm)
+  tibble(condition=df$condition, score=as.numeric(Mnorm %*% w), rank=rank(-as.numeric(Mnorm %*% w), ties.method="min"),
+         method="EWM", weight=paste(w, collapse=","))
+}
+equal_weight_score <- function(metrics_df, directions){
+  metr <- setdiff(names(metrics_df), "condition"); df <- metrics_df
+  for (nm in metr) if (!directions[[nm]]) df[[nm]] <- -df[[nm]]
+  M <- as.matrix(df[, metr]); Mnorm <- apply(M, 2, normalize_minmax)
+  tibble(condition=df$condition, score=rowMeans(Mnorm), rank=rank(-rowMeans(Mnorm), ties.method="min"), method="Equal")
+}
+pca_weight_score <- function(metrics_df, directions){
+  metr <- setdiff(names(metrics_df), "condition"); df <- metrics_df
+  for (nm in metr) if (!directions[[nm]]) df[[nm]] <- -df[[nm]]
+  M <- scale(as.matrix(df[, metr])); pc <- prcomp(M, center=TRUE, scale.=TRUE)
+  w <- abs(pc$rotation[,1]) / sum(abs(pc$rotation[,1]))
+  s <- as.numeric(M %*% w)
+  tibble(condition=df$condition, score=s, rank=rank(-s, ties.method="min"), method="PCA", weight=paste(w, collapse=","))
+}
+objective_only_score <- function(metrics_df, directions, groups){
+  keep <- intersect(groups$objective, setdiff(names(metrics_df), "condition"))
+  df <- metrics_df[, c("condition", keep), drop=FALSE]; directions_sub <- directions[keep]
+  equal_weight_score(df, directions_sub) %>% mutate(method="ObjectiveOnly")
+}
+ewm_sensitivity <- function(metrics_df, directions, groups){
+  r1 <- ewm_score(metrics_df, directions)
+  r2 <- equal_weight_score(metrics_df, directions)
+  r3 <- pca_weight_score(metrics_df, directions)
+  r4 <- if (length(groups$objective)) objective_only_score(metrics_df, directions, groups) else NULL
+  ranks <- dplyr::bind_rows(r1, r2, r3, r4)
+  wide <- ranks %>% dplyr::select(condition, method, rank) %>% tidyr::pivot_wider(names_from = method, values_from = rank)
+  methods <- setdiff(names(wide), "condition")
+  if (length(methods) >= 2) {
+    combs <- t(combn(methods, 2))
+    cors <- purrr::map_dfr(1:nrow(combs), function(i){
+      a <- combs[i,1]; b <- combs[i,2]
+      tibble(pair=paste(a,b,sep="~"), spearman=suppressWarnings(cor(wide[[a]], wide[[b]], method="spearman", use="pairwise")))
+    })
+  } else { cors <- tibble(pair=character(0), spearman=numeric(0)) }
+  list(ranks=ranks, spearman=cors)
+}
+
+# Build EWM input from EMMs (full grid) of each DV — ROBUST 
+build_ewm_metrics_from_emms <- function(out_root){ 
+  read_emm <- function(dv){ 
+    path <- file.path(out_root, dv, paste0(dv, "_EMMs_fullgrid.csv")) 
+    if (!file.exists(path)) return(NULL) 
+    readr::read_csv(path, show_col_types = FALSE) |> 
+      dplyr::mutate(condition = paste(Visual_Factor, Auditory_Factor, Haptic_Factor, sep="|")) |> 
+      dplyr::select(condition, response) 
+  } 
+
+  lst <- list( 
+    RT        = read_emm("RT"), 
+    NDRT      = read_emm("NDRT"), 
+    DALI      = read_emm("DALI"), 
+    TRUST     = read_emm("TRUST"), 
+    SUS       = read_emm("SUS"),
+    DURVISIT  = read_emm("DURVISIT"),
+    PUPIL     = read_emm("PUPIL")
+  ) 
+
+  missing <- names(lst)[vapply(lst, is.null, logical(1))] 
+  if (length(missing) > 0) { 
+    write_txt(paste("Missing EMM files for:", paste(missing, collapse = ", ")), 
+              file.path(out_root, "EWM", "README.txt")) 
+  } 
+
+  keep <- lst[!vapply(lst, is.null, logical(1))] 
+  if (length(keep) < 2) return(NULL)  # 少于两项就不做 EWM 
+
+  # 把各自的 response 列改成对应 DV 名，再做全连接 
+  keep <- Map(function(nm, df) dplyr::rename(df, !!nm := response), names(keep), keep) 
+  metrics <- Reduce(function(x, y) dplyr::full_join(x, y, by = "condition"), keep) 
+  metrics 
+}
+
+# ----------------------- Main DV runner ---------------------------------
+run_one_dv <- function(cfg){
+  cfg <- as.list(cfg)
+  stopifnot(is.character(cfg$dv_code), length(cfg$dv_code) == 1L)
+  dv <- cfg$dv_code; out_dir <- file.path(OUTPUT_ROOT, dv); dir_create(out_dir)
+  
+  # ======================================================================
+  # 新增代码: 在函数开头初始化一个列表来存储汇总信息
+  # ======================================================================
+  summary_info <- list(
+    dv_code = dv,
+    random_effect_spec = "Model failed to fit",
+    mcar_p_value = NA_real_,
+    power_summary = "Power analysis not run or 'simr' package not installed."
+  )
+  
+  dat <- read_any(cfg$input_path)
+
+  # Factors
+  dat <- ensure_factors(dat, cfg$id_col, cfg$vis_col, cfg$aud_col, cfg$hap_col)
+  
+  # 先把 *_Success 等别名映射回真实列名 
+  cfg$dv_col <- normalize_dv_col(dat, cfg$dv_col) 
+ 
+  # 取 DV，并确保是纯 numeric 向量（避免 list/字符混入） 
+  dv_raw <- dat[[cfg$dv_col]] 
+  if (is.list(dv_raw)) dv_raw <- unlist(dv_raw, use.names = FALSE) 
+  dv_raw <- suppressWarnings(as.numeric(dv_raw))
+
+  # Self-check & missingness
+  save_csv(head(dat[, c(cfg$id_col, cfg$vis_col, cfg$aud_col, cfg$hap_col, cfg$dv_col)], 20), file.path(out_dir, "00_head_check.csv"))
+  dv_summ <- summary(dv_raw) 
+  dv_df <- data.frame(stat = names(dv_summ), 
+                     value = as.numeric(dv_summ), 
+                     row.names = NULL, check.names = FALSE) 
+  save_csv(dv_df, file.path(out_dir, "00_DV_summary.csv"))
+  report_missingness(dat, cfg$id_col, c(cfg$vis_col, cfg$aud_col, cfg$hap_col), cfg$dv_col, file.path(out_dir, dv))
+  
+  # 捕获Little's MCAR test的p值（支持naniar后备，含不可评估门卫）
+  mcar_p <- NA_real_
+  wide <- dat %>% 
+    mutate(cond = interaction(across(all_of(c(cfg$vis_col, cfg$aud_col, cfg$hap_col))), drop = TRUE)) %>% 
+    group_by(.data[[cfg$id_col]], cond) %>%
+    summarise(value = suppressWarnings(as.numeric(mean(.data[[cfg$dv_col]], na.rm = FALSE))), .groups = "drop") %>%
+    tidyr::pivot_wider(names_from = cond, values_from = value) 
+
+  # 只保留数值列，并去掉全 NA / 零方差的列 
+  datM <- as.data.frame(wide[, -1, drop = FALSE]) 
+  datM <- as.data.frame(lapply(datM, function(z) suppressWarnings(as.numeric(z)))) 
+  non_empty <- which(colSums(!is.na(datM)) > 0) 
+  if (length(non_empty) >= 2) { 
+    datM <- datM[, non_empty, drop = FALSE] 
+  } 
+
+  has_enough_cols <- is.data.frame(datM) && ncol(datM) >= 2 
+  has_enough_rows <- nrow(datM) >= 5 
+  has_variation   <- all(vapply(datM, function(col) sd(col, na.rm = TRUE), 0) > 0, na.rm = TRUE) 
+  pattern_count <- tryCatch(nrow(unique(as.data.frame(is.na(datM)))), error = function(e) NA_integer_)
+  if (is.na(pattern_count)) pattern_count <- 0
+  assessable <- has_enough_cols && has_enough_rows && has_variation && (pattern_count >= 2)
+
+  if (assessable) { 
+    if (requireNamespace("BaylorEdPsych", quietly = TRUE)) { 
+      mcar <- tryCatch(BaylorEdPsych::LittleMCAR(as.matrix(datM)), error = function(e) e) 
+      if (!inherits(mcar, "error") && !is.null(mcar$p.value)) {
+        df_val <- if ("df" %in% names(mcar)) as.integer(mcar$df) else NA_integer_
+        if (is.na(df_val) || df_val >= 1) {
+          mcar_p <- as.numeric(mcar$p.value)
+        }
+      }
+    } else if (requireNamespace("naniar", quietly = TRUE)) { 
+      mcar2 <- tryCatch(naniar::mcar_test(datM), error=function(e) e) 
+      if (!inherits(mcar2, "error")) { 
+        pv <- NULL 
+        if ("p.value" %in% names(mcar2)) pv <- mcar2$p.value 
+        if (is.null(pv) && "p_value" %in% names(mcar2)) pv <- mcar2$p_value 
+        if (!is.null(pv)) mcar_p <- as_scalar_na(pv) 
+      } 
+    } 
+  } 
+  summary_info$mcar_p_value <- mcar_p
+
+  win_probs <- NULL 
+  if (!is.null(cfg$winsorize)) { 
+    # 处理list类型的winsorize值
+    wp <- cfg$winsorize
+    if (!is.null(wp)) {
+      # 如果是list类型，先转换为向量
+      if (is.list(wp)) {
+        wp <- unlist(wp, use.names = FALSE)
+      }
+      wp <- as.numeric(wp) 
+      if (length(wp) == 1) wp <- c(wp, 1 - wp)  # 兼容只给 0.05 的老写法 
+      if (length(wp) >= 2) win_probs <- wp[1:2] 
+    }
+  } 
+  if (!is.null(win_probs) && all(is.finite(win_probs))) { 
+    dv_raw <- winsorize_vec(dv_raw, win_probs) 
+  }
+
+  # Transform
+  y <- dv_raw
+  if (cfg$transform == "elogit") {
+    # if percentage provided (0..100), convert to 0..1
+    if (max(y, na.rm=TRUE) > 1.001) y <- y/100
+  }
+  y_trans <- apply_transform(y, cfg$transform, dv)
+  tf_info <- attr(y_trans, "transform_info")
+  dat$DV_trans <- as.numeric(y_trans)
+
+  # Box-Cox diagnostic (where applicable)
+  if (cfg$transform == "boxcox") {
+    tryCatch({
+      export_boxcox_profile(dv_raw, file.path(out_dir, paste0(dv, "_boxcox_profile.png")))
+    }, error = function(e) {
+      message("Warning: Box-Cox profile export failed: ", e$message)
+    })
+  }
+
+  # Fixed-effects formula
+  fixed <- as.formula(paste0("DV_trans ~ ", cfg$vis_col, " * ", cfg$aud_col, " * ", cfg$hap_col))
+
+  # Fit with target random-effects (step-down recorded)
+  fit_res <- fit_lmm_with_target(fixed, dat, cfg$id_col, cfg$aud_col, cfg$hap_col, cfg$target_random)
+  model <- fit_res$fit
+  
+  # ======================================================================
+  # 新增代码: 捕获最终使用的随机效应结构
+  # ======================================================================
+  summary_info$random_effect_spec <- fit_res$used
+
+  # Save model summary & notes
+  write_txt(paste(capture.output(summary(model)), collapse="\n"), file.path(out_dir, paste0(dv, "_MODEL_SUMMARY.txt")))
+  # Enriched model notes: formula, contrasts, optimizer & convergence
+  opt <- tryCatch(model@optinfo, error=function(e) NULL)
+  grad <- tryCatch(as.numeric(opt$derivs$grad), error=function(e) NA_real_)
+  grad_norm <- if (!all(is.na(grad))) sqrt(sum(grad^2)) else NA_real_
+  conv_msg <- tryCatch(paste(c(opt$conv$lme4$messages), collapse="; "), error=function(e) "")
+  optimizer <- tryCatch(as.character(opt$optimizer), error=function(e) NA_character_)
+  contr_opts <- tryCatch(getOption("contrasts"), error=function(e) c(NA, NA))
+  lev_v <- tryCatch(paste(levels(dat[[cfg$vis_col]]), collapse="|"), error=function(e) NA_character_)
+  lev_a <- tryCatch(paste(levels(dat[[cfg$aud_col]]), collapse="|"), error=function(e) NA_character_)
+  lev_h <- tryCatch(paste(levels(dat[[cfg$hap_col]]), collapse="|"), error=function(e) NA_character_)
+  write_txt(c(
+    paste0("Data file: ", cfg$input_path),
+    paste0("Formula: ", deparse(formula(model))),
+    paste0("Factor levels: V=", lev_v, "; A=", lev_a, "; H=", lev_h),
+    paste0("Contrasts (unordered, ordered): ", paste(contr_opts, collapse=", ")),
+    paste0("Random-effects (used): ", fit_res$used),
+    paste0("Optimizer: ", optimizer),
+    paste0("Convergence messages: ", conv_msg),
+    paste0("Gradient L2-norm: ", format(grad_norm, digits=6)),
+    paste0("Transform: ", tf_info$transform),
+    paste0("BoxCox lambda: ", ifelse(is.na(tf_info$lambda), "NA", format(tf_info$lambda, digits=4))),
+    paste0("Shift: ", format(tf_info$shift, digits=6)),
+    paste0("MC policy: ", MC_POLICY)
+  ), file.path(out_dir, paste0(dv, "_MODEL_NOTES.txt")))
+
+  # Diagnostics
+  export_varcorr_table(model, file.path(out_dir, paste0(dv, "_VarCorr.csv")))
+  export_lmm_diagnostics(model, file.path(out_dir, paste0(dv, "_DIAG")))
+
+  # Type-III ANOVA (Satterthwaite)
+  a3 <- anova(model, type = 3)
+  a3_df <- broom.mixed::tidy(a3) %>%
+    dplyr::rename(df = NumDF) %>%
+    dplyr::mutate(dfd = DenDF)
+  save_csv(a3_df, file.path(out_dir, paste0(dv, "_ANOVA_typeIII.csv")))
+
+  # Partial eta^2 with 95% CI
+  try({
+    eta <- effectsize::eta_squared(a3, partial = TRUE, ci = 0.95) %>% as.data.frame()
+    save_csv(eta, file.path(out_dir, paste0(dv, "_partial_eta2_95CI.csv")))
+  }, silent = TRUE)
+
+  # R2 (Nakagawa)
+  try({
+    r2 <- performance::r2_nakagawa(model)
+    r2_df <- data.frame(Marginal_R2 = r2$R2_marginal, Conditional_R2 = r2$R2_conditional)
+    save_csv(r2_df, file.path(out_dir, paste0(dv, "_R2_Nakagawa.csv")))
+  }, silent = TRUE)
+
+  # LRTs for interactions
+  full_ML <- try(suppressMessages(update(model, REML = FALSE)), silent = TRUE)
+  if (!inherits(full_ML, "try-error")) {
+    # 显式构建删项后的公式，避免 update(~ . - …) 在命名公式环境下失效
+    drop_and_lrt <- function(term){
+      # 使用严格嵌套的删项公式（主效应→连同相关2/3阶，二阶→连同三阶）
+      factors <- list(V = cfg$vis_col, A = cfg$aud_col, H = cfg$hap_col)
+      fm <- make_fcompare_formula(term, factors)  # e.g., ~ . - V:A - V:A:H
+      # 通过 update() 保证使用与 full_ML 完全相同的数据对象，以满足 anova 比较要求
+      red <- try(suppressMessages(update(full_ML, fm)), silent = TRUE)
+      if (inherits(red, "try-error")) return(NULL)
+      anova(full_ML, red)
+    }
+    lrt3 <- drop_and_lrt(paste0(cfg$vis_col, ":", cfg$aud_col, ":", cfg$hap_col))
+    lrtVA <- drop_and_lrt(paste0(cfg$vis_col, ":", cfg$aud_col))
+    lrtVH <- drop_and_lrt(paste0(cfg$vis_col, ":", cfg$hap_col))
+    lrtAH <- drop_and_lrt(paste0(cfg$aud_col, ":", cfg$hap_col))
+    write_txt(c(capture.output(lrt3)), file.path(out_dir, paste0(dv, "_LRT_3way.txt")))
+    write_txt(c("=== LRT VA ===", capture.output(lrtVA),
+                "", "=== LRT VH ===", capture.output(lrtVH),
+                "", "=== LRT AH ===", capture.output(lrtAH)),
+              file.path(out_dir, paste0(dv, "_LRT_2way.txt")))
+    # Structured LRT summary CSV
+    lrt_rows <- list()
+    add_lrt <- function(lrt_obj, term_label) {
+      if (!is.null(lrt_obj)) {
+        df <- as.data.frame(lrt_obj)
+        chisq <- suppressWarnings(as.numeric(tail(df[["Chisq"]], 1)))
+        dfnum  <- suppressWarnings(as.numeric(tail(df[["Df"]], 1)))
+        pval   <- suppressWarnings(as.numeric(tail(df[["Pr(>Chisq)"]], 1)))
+        lrt_rows[[length(lrt_rows)+1]] <<- data.frame(
+          term = term_label, chisq = chisq, df = dfnum, p = pval,
+          sig = ifelse(!is.na(pval) && pval < .05, "*", ""),
+          stringsAsFactors = FALSE
+        )
+      }
+    }
+    add_lrt(lrt3, paste0(cfg$vis_col, ":", cfg$aud_col, ":", cfg$hap_col))
+    add_lrt(lrtVA, paste0(cfg$vis_col, ":", cfg$aud_col))
+    add_lrt(lrtVH, paste0(cfg$vis_col, ":", cfg$hap_col))
+    add_lrt(lrtAH, paste0(cfg$aud_col, ":", cfg$hap_col))
+    lrt_df <- do.call(rbind, lrt_rows)
+    if (!is.null(lrt_df) && nrow(lrt_df) > 0) {
+      lrt_df$anova_type <- "III"
+      lrt_df$method <- "ML nested-model Chi-square"
+      save_csv(lrt_df, file.path(out_dir, paste0(dv, "_LRT_summary.csv")))
+    }
+  }
+
+  # EMMs (response scale) and pairwise contrasts
+  tran_obj <- make_emm_tran(tf_info)
+  emm_grid <- try(emmeans::emmeans(
+    model,
+    specs = stats::as.formula(paste0("~ ", cfg$vis_col, "*", cfg$aud_col, "*", cfg$hap_col)),
+    type = "response", tran = tran_obj
+  ), silent = TRUE)
+  
+  if (inherits(emm_grid, "try-error")) {
+    # 回退：不带 tran，至少把 EMMs 跑出来
+    emm_grid <- emmeans::emmeans(
+      model,
+      specs = stats::as.formula(paste0("~ ", cfg$vis_col, "*", cfg$aud_col, "*", cfg$hap_col)),
+      type = "link"
+    )
+  }
+  emm_df <- as.data.frame(emm_grid)
+  if (tf_info$transform %in% c("log","boxcox") && !is.na(tf_info$shift) && tf_info$shift != 0) {
+    ci_cols <- intersect(names(emm_df), c("response","lower.CL","upper.CL","asymp.LCL","asymp.UCL"))
+    for (cc in ci_cols) emm_df[[cc]] <- emm_df[[cc]] - tf_info$shift
+  }
+  save_csv(emm_df, file.path(out_dir, paste0(dv, "_EMMs_fullgrid.csv")))
+
+  # Decide MC adjustment text and policy
+  policy_text <- if (MC_POLICY == "mixed") {
+    "Policy: Tukey for multi-level factors; Holm for 2x2 simple-effects families."
+  } else { "Policy: Tukey for all pairwise families." }
+  write_mcadj_policy(dv, policy_text, out_dir)
+
+  # Simple-effects families
+  do_pairs_write <- function(spec, fname, adj) {
+    # 记录spec以便调试
+    write_txt(c("SPEC:", paste(deparse(spec), collapse = " "),
+               paste("ADJ:", adj)),
+              file.path(out_dir, paste0(dv, "_DEBUG_SPEC_", fname, ".txt")))
+    # 安全调用emmeans
+    em <- tryCatch({
+      emmeans::emmeans(model, specs = spec, type = "response", tran = tran_obj)
+    }, error = function(e) e)
+    if (inherits(em, "error")) {
+      # 回退：不带 tran，至少把 EMMs 跑出来
+      em <- tryCatch({
+        emmeans::emmeans(model, specs = spec, type = "link")
+      }, error = function(e) e)
+    }
+    if (inherits(em, "error")) {
+      write_txt(c("ERROR in emmeans for", fname, conditionMessage(em)),
+                file.path(out_dir, paste0(dv, "_Pairs_", fname, "_ERROR.txt")))
+      return(invisible(NULL))
+    }
+    save_csv(as.data.frame(em), file.path(out_dir, paste0(dv, "_EMMs_", fname, ".csv")))
+    # 安全pairs
+    pw <- tryCatch({
+      pairs(em, adjust = adj)
+    }, error = function(e) e)
+    if (inherits(pw, "error")) {
+      write_txt(c("ERROR in pairs for", fname, conditionMessage(pw)),
+                file.path(out_dir, paste0(dv, "_Pairs_", fname, "_ERROR.txt")))
+      return(invisible(NULL))
+    }
+    save_csv(as.data.frame(pw), file.path(out_dir, paste0(dv, "_Pairs_", fname, "_", toupper(adj), ".csv")))
+    # Add effect sizes (on link)
+    try({
+      dtab <- emmeans::eff_size(pw, sigma = sigma(model), edf = df.residual(model))
+      save_csv(as.data.frame(dtab), file.path(out_dir, paste0(dv, "_CohensD_", fname, ".csv")))
+    }, silent = TRUE)
+    invisible(pw)
+  }
+
+  # Determine significance pattern from ANOVA to choose families
+  amap <- setNames(a3_df$p.value, a3_df$term)
+  has3 <- !is.na(amap[paste0(cfg$vis_col, ":", cfg$aud_col, ":", cfg$hap_col)]) && amap[paste0(cfg$vis_col, ":", cfg$aud_col, ":", cfg$hap_col)] < .05
+  hasVA<- !is.na(amap[paste0(cfg$vis_col, ":", cfg$aud_col)]) && amap[paste0(cfg$vis_col, ":", cfg$aud_col)] < .05
+  hasVH<- !is.na(amap[paste0(cfg$vis_col, ":", cfg$hap_col)]) && amap[paste0(cfg$vis_col, ":", cfg$hap_col)] < .05
+  hasAH<- !is.na(amap[paste0(cfg$aud_col, ":", cfg$hap_col)]) && amap[paste0(cfg$aud_col, ":", cfg$hap_col)] < .05
+
+  if (has3) {
+    adj3_holm <- if (MC_POLICY=="mixed") ADJ_HOLM else ADJ_TUKEY
+    do_pairs_write(stats::as.formula(paste0("~ ", cfg$hap_col, " | ", cfg$aud_col, "*", cfg$vis_col)), "H_by_AV", adj3_holm)
+    # 3-way decomposition additions: AH family within V, and V within A
+    do_pairs_write(stats::as.formula(paste0("~ ", cfg$aud_col, "*", cfg$hap_col, " | ", cfg$vis_col)), "AH_by_V", adj3_holm)
+    adj3_tukey <- ADJ_TUKEY
+    do_pairs_write(stats::as.formula(paste0("~ ", cfg$vis_col, " | ", cfg$aud_col)), "V_by_A", adj3_tukey)
+  } else {
+    if (hasVA) {
+      adj_va <- if (MC_POLICY=="mixed") ADJ_TUKEY else ADJ_TUKEY
+      do_pairs_write(stats::as.formula(paste0("~ ", cfg$vis_col, " | ", cfg$aud_col)), "V_by_A", adj_va)
+    }
+    if (hasVH) {
+      adj_vh_h <- if (MC_POLICY=="mixed") ADJ_HOLM else ADJ_TUKEY
+      do_pairs_write(stats::as.formula(paste0("~ ", cfg$hap_col, " | ", cfg$vis_col)), "H_by_V", adj_vh_h)
+      adj_vh_v <- ADJ_TUKEY
+      do_pairs_write(stats::as.formula(paste0("~ ", cfg$vis_col, " | ", cfg$hap_col)), "V_by_H", adj_vh_v)
+    }
+    if (hasAH) {
+      adj_ah <- if (MC_POLICY=="mixed") ADJ_HOLM else ADJ_TUKEY
+      do_pairs_write(stats::as.formula(paste0("~ ", cfg$hap_col, " | ", cfg$aud_col)), "H_by_A", adj_ah)
+    }
+  }
+  write_txt("REACHED AFTER EMMs", file.path(out_dir, paste0(dv, "__DEBUG_AFTER_EMMS.txt")))
+
+  # Safety trade-off table for RT (distance deltas at 90km/h)
+  if (dv == "RT") {
+    path_pw <- file.path(out_dir, paste0(dv, "_Pairs_V_by_A_", toupper(if (MC_POLICY=="mixed") ADJ_TUKEY else ADJ_TUKEY), ".csv"))
+    if (file.exists(path_pw)) {
+      pw <- readr::read_csv(path_pw, show_col_types = FALSE)
+      dist <- try(add_distance_delta(pw, speed_kmh = 90, rt_units = "s"), silent = TRUE)
+      if (!inherits(dist, "try-error")) save_csv(dist, file.path(out_dir, paste0(dv, "_Pairs_V_by_A_withDistance.csv")))
+    }
+  }
+
+  # Optional power analysis (simr; ML-based, manual-compliant)
+  write_txt(sprintf("POWER_RUN=%s, simr=%s", as.character(POWER_RUN), as.character(requireNamespace("simr", quietly=TRUE))), file.path(out_dir, paste0(dv, "_PowerSim.debugflag")))
+  if (POWER_RUN && requireNamespace("simr", quietly = TRUE)) {
+    write_txt("POWER block entered", file.path(out_dir, paste0(dv, "_PowerSim.debug")))
+    pdir <- file.path(out_dir, "POWER"); dir_create(pdir)
+    tryCatch({
+      # 使用显式公式和数据重新拟合为 ML，避免调用中公式以符号形式保存
+      fm_exp <- formula(model)
+      # 将数据对象挂入公式环境，确保后续 simulate/eval 能解析到 dat
+      e_form <- new.env(parent = environment(fm_exp))
+      assign("dat", dat, envir = e_form)
+      attr(fm_exp, ".Environment") <- e_form
+      full_ml <- suppressWarnings(lme4::lmer(fm_exp, data = dat, REML = FALSE, control = .lmer_ctrl))
+      # 将数据显式挂载到模型，避免 simr 获取不到设计（nrow=NA）
+      if (requireNamespace("simr", quietly = TRUE)) {
+        full_ml <- tryCatch(simr::setData(full_ml, dat), error = function(e) full_ml)
+      }
+      factors <- list(V = cfg$vis_col, A = cfg$aud_col, H = cfg$hap_col)
+      
+      # Debug info: check simr data attachment
+      gd <- try(simr::getData(full_ml), silent = TRUE)
+      n_gd <- if (!inherits(gd, "try-error") && !is.null(gd)) nrow(gd) else NA_integer_
+      write_txt(sprintf("simr_getData_nrow=%s; class=%s", as.character(n_gd), paste(class(full_ml), collapse=",")), file.path(pdir, paste0(dv, "_Power_DEBUG_info.txt")))
+      # Inspect model call for formula handling
+      mc <- try(getCall(full_ml), silent = TRUE)
+      if (!inherits(mc, "try-error")) {
+        write_txt(paste("MODEL_CALL:", deparse(mc)), file.path(pdir, paste0(dv, "_MODEL_CALL.txt")))
+        # Also try capture the formula slot in the call
+        fslot <- try(mc[["formula"]], silent = TRUE)
+        write_txt(paste("CALL_FORMULA_TYPE:", if (inherits(fslot, "try-error") || is.null(fslot)) "<error>" else typeof(fslot)), file.path(pdir, paste0(dv, "_MODEL_CALL_FORMULA_TYPE.txt")))
+      }
+
+      # Quick refit diagnostic to see where errors occur
+      if (requireNamespace("simr", quietly = TRUE)) {
+        y0 <- try(fitted(full_ml), silent = TRUE)
+        ref <- tryCatch(simr:::doFit.default(y0, full_ml), 
+                         error = function(e){
+                           tb <- utils::capture.output(traceback())
+                           write_txt(paste("doFit.default error:", e$message, "\nTRACE:\n", paste(tb, collapse="\n")), file.path(pdir, paste0(dv, "_REFIT_DIAG_err.txt")))
+                           e
+                         })
+        if (!inherits(ref, "try-error")) {
+          write_txt(paste("doFit.default ok; class=", paste(class(ref), collapse=",")), file.path(pdir, paste0(dv, "_REFIT_DIAG_ok.txt")))
+        }
+      }
+      
+      # Run tests (fixed for 2-level main effects; LRT for multi-level/interaction)
+      pow_A_fix <- try(power_fixed(full_ml, factors$A, nsim = POWER_NSIM), silent = TRUE)
+      pow_A_lrt <- try(power_lrt(full_ml, drop_terms = c(factors$A), factors = factors, nsim = POWER_NSIM), silent = TRUE)
+      pow_H_fix <- try(power_fixed(full_ml, factors$H, nsim = POWER_NSIM), silent = TRUE)
+      pow_H_lrt <- try(power_lrt(full_ml, drop_terms = c(factors$H), factors = factors, nsim = POWER_NSIM), silent = TRUE)
+      pow_V_lrt <- try(power_lrt(full_ml, drop_terms = c(factors$V), factors = factors, nsim = POWER_NSIM), silent = TRUE)
+      pow_AH_lrt <- try(power_lrt(full_ml, drop_terms = paste(factors$A, factors$H, sep=":"), factors = factors, nsim = POWER_NSIM), silent = TRUE)
+      pow_VA_lrt <- try(power_lrt(full_ml, drop_terms = paste(factors$V, factors$A, sep=":"), factors = factors, nsim = POWER_NSIM), silent = TRUE)
+      pow_VH_lrt <- try(power_lrt(full_ml, drop_terms = paste(factors$V, factors$H, sep=":"), factors = factors, nsim = POWER_NSIM), silent = TRUE)
+      pow_VAH_lrt <- try(power_lrt(full_ml, drop_terms = paste(factors$V, factors$A, factors$H, sep=":"), factors = factors, nsim = POWER_NSIM), silent = TRUE)
+
+      # Write detailed txt outputs per manual
+      capture.output(pow_A_fix, file = file.path(pdir, paste0(dv, "_Power_A_fixed.txt")))
+      capture.output(pow_A_lrt, file = file.path(pdir, paste0(dv, "_Power_A_LRT.txt")))
+      capture.output(pow_H_fix, file = file.path(pdir, paste0(dv, "_Power_H_fixed.txt")))
+      capture.output(pow_H_lrt, file = file.path(pdir, paste0(dv, "_Power_H_LRT.txt")))
+      capture.output(pow_V_lrt, file = file.path(pdir, paste0(dv, "_Power_V_LRT.txt")))
+      capture.output(pow_AH_lrt, file = file.path(pdir, paste0(dv, "_Power_AH_LRT.txt")))
+      capture.output(pow_VA_lrt, file = file.path(pdir, paste0(dv, "_Power_VA_LRT.txt")))
+      capture.output(pow_VH_lrt, file = file.path(pdir, paste0(dv, "_Power_VH_LRT.txt")))
+      capture.output(pow_VAH_lrt, file = file.path(pdir, paste0(dv, "_Power_VAH_LRT.txt")))
+
+      # Record simulation error messages for diagnostics
+      rec_one <- function(obj, path) {
+        e <- try(attr(obj, "errors"), silent = TRUE)
+        if (!inherits(e, "try-error") && !is.null(e) && length(e)) {
+          msgs <- unique(as.character(e))
+          write_txt(paste(head(msgs, 20), collapse = "\n"), path)
+        }
+      }
+      rec_one(pow_A_fix, file.path(pdir, paste0(dv, "_Power_ERRORS_A_fixed.txt")))
+      rec_one(pow_A_lrt, file.path(pdir, paste0(dv, "_Power_ERRORS_A_LRT.txt")))
+      rec_one(pow_H_fix, file.path(pdir, paste0(dv, "_Power_ERRORS_H_fixed.txt")))
+      rec_one(pow_H_lrt, file.path(pdir, paste0(dv, "_Power_ERRORS_H_LRT.txt")))
+      rec_one(pow_V_lrt, file.path(pdir, paste0(dv, "_Power_ERRORS_V_LRT.txt")))
+      rec_one(pow_AH_lrt, file.path(pdir, paste0(dv, "_Power_ERRORS_AH_LRT.txt")))
+      rec_one(pow_VA_lrt, file.path(pdir, paste0(dv, "_Power_ERRORS_VA_LRT.txt")))
+      rec_one(pow_VH_lrt, file.path(pdir, paste0(dv, "_Power_ERRORS_VH_LRT.txt")))
+      rec_one(pow_VAH_lrt, file.path(pdir, paste0(dv, "_Power_ERRORS_VAH_LRT.txt")))
+
+      # Dump structure of powerSim objects for deeper debugging
+      capture.output(str(pow_A_fix), file = file.path(pdir, paste0(dv, "_Power_A_fixed.str")))
+      capture.output(str(pow_A_lrt), file = file.path(pdir, paste0(dv, "_Power_A_LRT.str")))
+      capture.output(str(pow_H_fix), file = file.path(pdir, paste0(dv, "_Power_H_fixed.str")))
+      capture.output(str(pow_H_lrt), file = file.path(pdir, paste0(dv, "_Power_H_LRT.str")))
+      capture.output(str(pow_V_lrt), file = file.path(pdir, paste0(dv, "_Power_V_LRT.str")))
+      capture.output(str(pow_AH_lrt), file = file.path(pdir, paste0(dv, "_Power_AH_LRT.str")))
+      capture.output(str(pow_VA_lrt), file = file.path(pdir, paste0(dv, "_Power_VA_LRT.str")))
+      capture.output(str(pow_VH_lrt), file = file.path(pdir, paste0(dv, "_Power_VH_LRT.str")))
+      capture.output(str(pow_VAH_lrt), file = file.path(pdir, paste0(dv, "_Power_VAH_LRT.str")))
+
+      # Aggregate CSV for report compatibility
+      ps_sum <- function(x) {
+        if (inherits(x, "try-error") || is.null(x)) return(NULL)
+        summary(x)
+      }
+      choose_sum <- function(primary, fallback){
+        s <- ps_sum(primary); if (is.null(s)) ps_sum(fallback) else s
+      }
+      agg <- list(
+        "Visual_Factor" = ps_sum(pow_V_lrt),
+        "Auditory_Factor" = choose_sum(pow_A_fix, pow_A_lrt),
+        "Haptic_Factor"   = choose_sum(pow_H_fix, pow_H_lrt),
+        "Visual_Factor:Auditory_Factor" = ps_sum(pow_VA_lrt),
+        "Visual_Factor:Haptic_Factor"   = ps_sum(pow_VH_lrt),
+        "Auditory_Factor:Haptic_Factor" = ps_sum(pow_AH_lrt),
+        "Visual_Factor:Auditory_Factor:Haptic_Factor" = ps_sum(pow_VAH_lrt)
+      )
+      keep <- Filter(Negate(is.null), agg)
+      if (length(keep)) {
+        tab <- dplyr::bind_rows(lapply(names(keep), function(k){
+          x <- keep[[k]]; tibble(term = k,
+                                 power = as.numeric(x$mean),
+                                 lower = as.numeric(x$lower),
+                                 upper = as.numeric(x$upper),
+                                 nsim  = as.integer(x$trials))
+        }))
+        save_csv(tab, file.path(out_dir, paste0(dv, "_PowerSim.csv")))
+        tab_summary <- tab %>%
+          dplyr::filter(term %in% c("Visual_Factor","Auditory_Factor","Haptic_Factor",
+                                    "Visual_Factor:Auditory_Factor",
+                                    "Visual_Factor:Haptic_Factor",
+                                    "Auditory_Factor:Haptic_Factor",
+                                    "Visual_Factor:Auditory_Factor:Haptic_Factor")) %>%
+          dplyr::mutate(summary_str = sprintf("%s (Power=%.1f%%; nsim=%d)", term, as.numeric(power) * 100, as.integer(nsim)))
+        summary_info$power_summary <- paste(tab_summary$summary_str, collapse="; ")
+      } else {
+        write_txt("Power analysis produced no summarizable results.", file.path(out_dir, paste0(dv, "_PowerSim.txt")))
+      }
+    }, error = function(e) {
+      write_txt(paste("Power analysis error:", conditionMessage(e)), file.path(out_dir, paste0(dv, "_PowerSim.txt")))
+    })
+  } else if (POWER_RUN) {
+    write_txt("Package 'simr' not installed: skipped power analysis.", file.path(out_dir, paste0(dv, "_PowerSim.txt")))
+  }
+
+  # ======================================================================
+  # 修改代码: 改变函数的最终返回值
+  # 将原来的: invisible(list(model=model, tf_info=tf_info, out_dir=out_dir))
+  # 修改为:
+  # ======================================================================
+  
+  # 保证 mcar_p_value 一定是标量数值或 NA 
+  if (is.null(summary_info$mcar_p_value) || length(summary_info$mcar_p_value) == 0) { 
+    summary_info$mcar_p_value <- NA_real_ 
+  } 
+  
+  invisible(list(model=model, tf_info=tf_info, out_dir=out_dir, summary_info=summary_info))
+}
+
+# -------------------------- Run all DVs ---------------------------------
+dir_create(OUTPUT_ROOT)
+
+rows <- purrr::transpose(CONFIG)   # 把每一行变成一个命名 list 
+safe_run <- purrr::safely(run_one_dv, otherwise = NULL) 
+
+results <- purrr::imap(rows, function(cfg, idx){ 
+  res <- safe_run(cfg) 
+  if (!is.null(res$error)) { 
+    dv_tag <- as.list(cfg)$dv_code %||% paste0("DV_", idx) 
+    dir_create(file.path(OUTPUT_ROOT, dv_tag)) 
+    write_txt(c("ERROR in run_one_dv()", conditionMessage(res$error)), 
+              file.path(OUTPUT_ROOT, dv_tag, "_ERROR.txt")) 
+  } 
+  res$result 
+})
+
+# ---------------------- EWM Sensitivity Export --------------------------
+# 初始化 res 变量，防止在某些 DV 的 EMMs 还没生成时出现未定义错误
+res <- NULL
+
+metrics <- build_ewm_metrics_from_emms(OUTPUT_ROOT)
+if (!is.null(metrics) && nrow(metrics) > 0) {
+  ewm_dir <- file.path(OUTPUT_ROOT, "EWM"); dir_create(ewm_dir)
+  readr::write_csv(metrics, file.path(ewm_dir, "metrics_from_emms.csv"))
+  
+  # 只重命名存在的列
+  available_cols <- intersect(names(metrics), c("RT", "NDRT", "DALI", "TRUST", "SUS", "DURVISIT", "PUPIL"))
+  if (length(available_cols) > 0) {
+    rename_list <- setNames(available_cols, available_cols)
+    metrics_renamed <- metrics %>% dplyr::rename(!!!rename_list)
+    
+    res <- ewm_sensitivity(metrics_df = metrics_renamed,
+                           directions = EWM_DIRECTIONS[available_cols], 
+                           groups = EWM_GROUPS)
+    readr::write_csv(res$ranks, file.path(ewm_dir, "ewm_rankings_all_methods.csv"))
+    readr::write_csv(res$spearman, file.path(ewm_dir, "ewm_rank_spearman.csv"))
+    readr::write_csv(res$spearman, file.path(ewm_dir, "ewm_stability.csv"))
+    # --- Export reproducible EWM tables ---
+    df <- metrics_renamed
+    # flip cost metrics per directions
+    for (nm in available_cols) if (!EWM_DIRECTIONS[[nm]]) df[[nm]] <- -df[[nm]]
+    M <- as.matrix(df[, available_cols])
+    # z_ij normalization
+    Mnorm <- apply(M, 2, normalize_minmax)
+    z <- as.data.frame(Mnorm); z$condition <- df$condition
+    z <- z[, c("condition", available_cols)]
+    readr::write_csv(z, file.path(ewm_dir, "EWM_z_matrix.csv"))
+    # entropy e_j, info utility d_j, weights w_j (3 decimals)
+    eps <- 1e-12; P <- sweep(Mnorm + eps, 2, colSums(Mnorm + eps), "/")
+    k <- 1/log(nrow(Mnorm)); e <- -k * colSums(P * log(P)); d <- 1 - e; w <- as.numeric(d / sum(d))
+    ew <- data.frame(metric = available_cols, entropy_e = round(e, 3), info_d = round(d, 3), weight_w = round(w, 3))
+    readr::write_csv(ew, file.path(ewm_dir, "EWM_entropy_weights.csv"))
+    # wide S_i and ranks for Equal, PCA, ObjectiveOnly, EWM
+    wide_ranks <- res$ranks %>% dplyr::select(condition, method, score, rank) %>% tidyr::pivot_wider(names_from = method, values_from = c(score, rank))
+    readr::write_csv(wide_ranks, file.path(ewm_dir, "EWM_ranks_wide.csv"))
+  } else {
+    write_txt("No valid DV columns found for EWM analysis.", file.path(OUTPUT_ROOT, "EWM", "README.txt"))
+  }
+} else {
+  write_txt("EMMs for required DVs not found or empty; skipped EWM sensitivity.", file.path(OUTPUT_ROOT, "EWM", "README.txt"))
+}
+
+# ---------------------- Export Supplementary Materials -------------------------
+export_supplementary_materials <- function(dest_dir, out_root=OUTPUT_ROOT){
+  dir_create(dest_dir)
+  sub_pairs <- file.path(dest_dir, "pairs"); dir_create(sub_pairs)
+  sub_re <- file.path(dest_dir, "random_effects"); dir_create(sub_re)
+  sub_lrt <- file.path(dest_dir, "lrt"); dir_create(sub_lrt)
+  sub_notes <- file.path(dest_dir, "model_notes"); dir_create(sub_notes)
+  sub_diag <- file.path(dest_dir, "diagnostics"); dir_create(sub_diag)
+  sub_missing <- file.path(dest_dir, "missingness"); dir_create(sub_missing)
+  # Copy per-DV items
+  for (dv in CONFIG$dv_code) {
+    src_dir <- file.path(out_root, dv)
+    if (!dir.exists(src_dir)) next
+    families <- c("V_by_A", "H_by_A", "H_by_V", "V_by_H", "H_by_AV", "AH_by_V")
+    for (fam in families) {
+      files <- list.files(src_dir, pattern = paste0("^", dv, "_Pairs_", fam, "_.*\\.csv$"), full.names = TRUE)
+      for (f in files) file.copy(f, file.path(sub_pairs, paste0(dv, "_", basename(f))), overwrite = TRUE)
+      emm_file <- file.path(src_dir, paste0(dv, "_EMMs_", fam, ".csv"))
+      if (file.exists(emm_file)) file.copy(emm_file, file.path(sub_pairs, paste0(dv, "_", basename(emm_file))), overwrite = TRUE)
+    }
+    vc <- file.path(src_dir, paste0(dv, "_VarCorr.csv"))
+    if (file.exists(vc)) file.copy(vc, file.path(sub_re, paste0(dv, "_VarCorr.csv")), overwrite = TRUE)
+    lrt <- file.path(src_dir, paste0(dv, "_LRT_summary.csv"))
+    if (file.exists(lrt)) file.copy(lrt, file.path(sub_lrt, paste0(dv, "_LRT_summary.csv")), overwrite = TRUE)
+    notes <- file.path(src_dir, paste0(dv, "_MODEL_NOTES.txt"))
+    if (file.exists(notes)) file.copy(notes, file.path(sub_notes, paste0(dv, "_MODEL_NOTES.txt")), overwrite = TRUE)
+    # diagnostics: collinearity, singularity, Box-Cox profile
+    diag_col <- file.path(src_dir, paste0(dv, "_DIAG_collinearity.txt"))
+    diag_sing <- file.path(src_dir, paste0(dv, "_DIAG_singularity.txt"))
+    boxcox <- file.path(src_dir, paste0(dv, "_boxcox_profile.png"))
+    if (file.exists(diag_col)) file.copy(diag_col, file.path(sub_diag, paste0(dv, "_DIAG_collinearity.txt")), overwrite = TRUE)
+    if (file.exists(diag_sing)) file.copy(diag_sing, file.path(sub_diag, paste0(dv, "_DIAG_singularity.txt")), overwrite = TRUE)
+    if (file.exists(boxcox)) file.copy(boxcox, file.path(sub_diag, paste0(dv, "_boxcox_profile.png")), overwrite = TRUE)
+    # missingness: trial counts, participant retention, MCAR log
+    tc <- file.path(src_dir, paste0(dv, "_trial_counts_by_condition.csv"))
+    pr <- file.path(src_dir, paste0(dv, "_participant_retention.csv"))
+    mcar <- file.path(src_dir, paste0(dv, "_LittleMCAR.txt"))
+    if (file.exists(tc)) file.copy(tc, file.path(sub_missing, paste0(dv, "_trial_counts_by_condition.csv")), overwrite = TRUE)
+    if (file.exists(pr)) file.copy(pr, file.path(sub_missing, paste0(dv, "_participant_retention.csv")), overwrite = TRUE)
+    if (file.exists(mcar)) file.copy(mcar, file.path(sub_missing, paste0(dv, "_LittleMCAR.txt")), overwrite = TRUE)
+  }
+  # EWM tables
+  src_ewm <- file.path(out_root, "EWM")
+  dst_ewm <- file.path(dest_dir, "EWM"); dir_create(dst_ewm)
+  ewm_files <- c("metrics_from_emms.csv","EWM_z_matrix.csv","EWM_entropy_weights.csv","EWM_ranks_wide.csv","ewm_rankings_all_methods.csv","ewm_rank_spearman.csv")
+  for (fn in ewm_files) {
+    f <- file.path(src_ewm, fn)
+    if (file.exists(f)) file.copy(f, file.path(dst_ewm, fn), overwrite = TRUE)
+  }
+  invisible(TRUE)
+}
+try(export_supplementary_materials(file.path(OUTPUT_ROOT, "需要准备的补充材料"), OUTPUT_ROOT), silent=TRUE)
+
+# ---------------------- Generate Final Summary Report ------------------------- 
+message("Generating final summary report...") 
+
+# 1. 从所有DV的运行结果中提取出汇总信息，并清理NULL值
+all_summaries <- results |> 
+  purrr::map("summary_info") |> 
+  purrr::compact()  # 去掉 NULL
+
+# 2. 调用报告生成函数 
+generate_summary_report( 
+  summaries_list = all_summaries, 
+  ewm_spearman_df = if (is.null(res)) NULL else res$spearman, # 安全处理 res 可能为 NULL 的情况
+  out_path = file.path(OUTPUT_ROOT, "_SUMMARY_REPORT.md") 
+) 
+
+message("Generated summary report: ", file.path(OUTPUT_ROOT, "_SUMMARY_REPORT.md")) 
+
+# ---- Reproducibility footer ----
+si <- utils::capture.output(sessionInfo())
+write_txt(si, file.path(OUTPUT_ROOT, "_SESSION_INFO.txt"))
+write_txt(paste("Random seed:", 20231031), file.path(OUTPUT_ROOT, "_SEED.txt"))
+
+message("All done. Outputs written to: ", OUTPUT_ROOT)
