@@ -1,0 +1,8 @@
+DV,formula,singular,n_obs,note
+RT,y_transformed ~ Visual_Factor * Auditory_Factor * Haptic_Factor +     age_26plus + baseline_trust_c + (1 + Auditory_Factor + Haptic_Factor | Participant_ID),FALSE,1981,converged
+TRUST,y_transformed ~ Visual_Factor * Auditory_Factor * Haptic_Factor +     age_26plus + baseline_trust_c + (1 + Auditory_Factor + Haptic_Factor | Participant_ID),FALSE,426,converged
+SUS,y_transformed ~ Visual_Factor * Auditory_Factor * Haptic_Factor +     age_26plus + baseline_trust_c + (1 + Auditory_Factor + Haptic_Factor | Participant_ID),FALSE,419,converged
+DALI,y_transformed ~ Visual_Factor * Auditory_Factor * Haptic_Factor +     age_26plus + baseline_trust_c + (1 + Auditory_Factor | Participant_ID),FALSE,432,converged
+NDRT,y_transformed ~ Visual_Factor * Auditory_Factor * Haptic_Factor +     age_26plus + baseline_trust_c + (two-stage LM on subject intercepts),NA,432,two-stage fallback used due to PD issues
+DURVISIT,y_transformed ~ Visual_Factor * Auditory_Factor * Haptic_Factor +     age_26plus + baseline_trust_c + (1 | Participant_ID),FALSE,379,converged
+PUPIL,y_transformed ~ Visual_Factor * Auditory_Factor * Haptic_Factor +     age_26plus + baseline_trust_c + (1 | Participant_ID),FALSE,379,converged
